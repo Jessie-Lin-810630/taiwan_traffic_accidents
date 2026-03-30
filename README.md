@@ -22,6 +22,8 @@ The project is organized into four sequential branches. Each branch represents a
             │   └── app.py                       # Streamlit run入口
             ├── tests/
             │   └── test_transform.py            # Unittest 測試檔
+            ├── sandbox/
+            │   └── miscellaneous.py             # 放置一些想做版控、但現在暫時用不到的函式
             ├── .env                             # 本地環境變數(e.g, DB_HOST=localhost)
             ├── pyproject.toml                   # Poetry 設定
             ├── poetry.lock                      # 精確版本鎖定
@@ -31,7 +33,7 @@ The project is organized into four sequential branches. Each branch represents a
     ``` #for example,add:
             packages = [{include = "src"}]'
     ```
-    
+
 # Branch 2, name: "feature/docker-integration"
 1. core func.: Containerize MySQL, Streamlit, and Apache Airflow. Airflow is utilized to schedule and automate ETL processes. This stage focuses on ensuring seamless communication and networking between containers.
 2. sources: merged from Branch 1 and pyproject.toml. ``Any modifications to database connections or service networking are handled in this branch.``
@@ -78,9 +80,20 @@ The project is organized into four sequential branches. Each branch represents a
 # How to run the srcipts?
 1. Always run under Project Root Directory (專案根目錄), then
     ```
+        # Execute pure python scripts for ETL:
+            poetry run python -m src.tasks.e_crawling_...
+            poetry run python -m src.tasks.l_.....
+        
+        # Execute pure python scripts for frontend analysis:
+            poetry run python -m src.cores.c_data_services
+
+        # Execute the SQL srcipts to create the table of analysis results:
+            You should have a MySQL server in your VM or local end first,
+            and connect to the server and execute the statements in 'mart_table_sql/analysis_overview_pedestrian_accidents.sql'. 
+            In the branch feature/etl-app, statements are usually saved in pure .sql file; However, when running, either by GUI (e.g. workbench) or sqlalchemy ORM is okay. 
+            These SQL statements will be integrated into a new DAG in the next branch so the sqlalchemey module will be introduced then.
+
         # Execute the streamlit:
             poetry run streamlit run src/app.py
 
-        # Execute pure pytho scripts:
-            poetry run python -m src.tasks.e_crawling_...
     ```
