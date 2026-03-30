@@ -218,3 +218,4 @@ settings.json
 *.csv
 *.zip
 Taiwan_night_markets_from_map_api_2026-03-25.json
+temp_try*.py
