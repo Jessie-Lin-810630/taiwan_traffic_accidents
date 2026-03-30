@@ -1,0 +1,3 @@
+[client]
+# 維持streamlit的sidebar自動導航功能但是隱藏不顯示。
+showSidebarNavigation = false
