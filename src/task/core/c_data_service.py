@@ -114,7 +114,7 @@ def get_and_slice_nightmarkets_multibatches() -> list:  # fetch_and_split_market
         set_cache(key_of_a_batch, batch, 43200)  # 存入Redis，保留12小時
         keys_of_batches.append(key_of_a_batch)  # 只回傳key給其他函式用
 
-    print(f"已生成 {len(keys_of_batches)}個Redis keys。")
+    print(f"已生成 {len(keys_of_batches)} 個Redis keys。")
     return keys_of_batches  # 回傳的只會是 ['xcom_claim_check:...', ...] 這樣短字串陣列，避免 XCom 爆表問題
 
 
@@ -279,7 +279,6 @@ def get_accident_heatmap_data(sample_size: int = 8000):
 def cal_accidents_nearby_nightmarket(batch_key: str,
                                      radius_m_list: list[float | int] | None = [3000],
                                      year_targets: list[int] | None = ["all_sample"]):  # process_market_batch()原名
-
     # 先拿cache_key從Redis取夜市資料
     batch = get_cache(batch_key)  # a list of dicts
     if not batch:
@@ -326,6 +325,7 @@ def cal_accidents_nearby_nightmarket(batch_key: str,
                 # 先存全年度的、粗篩3公里的資料進入Redis
                 cache_key_rough = f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_3.0_all_sample"
                 set_cache(cache_key_rough, df_nearby_accidents, 43200)
+                print(f"cache_key_rough: {cache_key_rough}存取成功")
             except Exception as e:
                 print(f"{cache_key_rough}寫入Redis失敗，error msg: {e}")
                 continue
@@ -467,6 +467,7 @@ if __name__ == "__main__":
     # print(get_pedestrian_trend().info())
     # print(get_all_nightmarkets().info())
     market_batch_keys = get_and_slice_nightmarkets_multibatches()
-    # cal_result = cal_accidents_nearby_nightmarket(market_batch_keys[0])
+    for key in market_batch_keys:
+        cal_result = cal_accidents_nearby_nightmarket(key)
     # process_tasks = cal_accidents_nearby_nightmarket.expand(batch_key=market_batch_keys)
-    aggregate_national_master(market_batch_keys[0:2])
+    aggregate_national_master(market_batch_keys)
