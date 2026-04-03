@@ -111,6 +111,8 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
                                "City": citylst,
                                "Night_market_name": nm_namelst,
                                "Night_market_address": nm_addresslst, })
+            if df.empty:
+                print(f"{csvfile_name}為空的dataframe，請檢查爬蟲程式")
 
             df.to_csv(csvfile_name, sep=",", encoding="utf-8-sig")
             print(f"====Save the file successfully! {csvfile_name}====")
