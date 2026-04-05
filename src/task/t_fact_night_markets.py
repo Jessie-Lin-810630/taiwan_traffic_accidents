@@ -5,15 +5,15 @@ import json
 import pandas as pd
 import numpy as np
 import re
-from src.task.e_crawling_nightmarket import cities_per_region
-
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
+from src.task.l_fact_night_markets import l_fact_night_markets
 
 # 找到讀檔路徑
 curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
 raw_data_save_dir = curr_working_dir/"test"/"raw_data"
 today = datetime.now().date()
-jsonfile_path = raw_data_save_dir/f"Taiwan_night_markets_from_map_api_2026-03-25.json"
-# jsonfile_path = raw_data_save_dir/f"Taiwan_night_markets_from_map_api_{today}.json"
+jsonfile_path = raw_data_save_dir/f"Taiwan_night_markets_from_map_api_{today}.json"
 
 
 def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int]:
@@ -27,11 +27,11 @@ def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int
     return batch_list
 
 
-def read_googlemap_responsed_json(jsonfile_path: str | Path) -> list[dict]:
+def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
     """Open the json file returned by googlemap place api which
     describing the geometry and business time of all the night markets
      in Taiwan."""
-    jsonfile_path = Path(str(jsonfile_path))
+    jsonfile_path = Path(jsonfile_path)
     with jsonfile_path.open(mode="r", encoding="utf-8") as jf:
         readout = json.load(jf)  # list with length of ~472, an element = a possible night market
         night_market_info_list = []
@@ -303,38 +303,25 @@ def t_clean_one_night_market(a_night_market_info: dict, cities_per_region: dict)
 
 
 def t_fact_night_markets(night_market_info_list: list[dict], cities_per_region: dict[list],
-                         batch_size: int | None = None) -> pd.DataFrame:
+                         database: str, batch_size: int | None = None) -> None:
 
     # 清理、並將清洗後的dataframe合併
-    all_records = []
+
     size = len(night_market_info_list) if batch_size is None else batch_size
     print(f"Cleaning data...")
-    for i in range(len(night_market_info_list[0: size])):
-        nm = night_market_info_list[i]
-        records_a_nm = t_clean_one_night_market(nm, cities_per_region)
-        all_records.extend(records_a_nm)  # list.extend(list[dict]) => list[dict, dict]
-        print(f"Successfully processed the records of the No.{i} potential night market...")
-    df_night_markets = pd.DataFrame(all_records)
+    for i in range(0, len(night_market_info_list), size):
+        all_records = []
+        nms = night_market_info_list[i: i+size]
+        for nm in nms:
+            records_a_nm = t_clean_one_night_market(nm, cities_per_region)
+            all_records.extend(records_a_nm)  # list.extend(list[dict]) => list[dict, dict]
+        df_night_markets = pd.DataFrame(all_records)
 
-    # 填補空值
-    df_night_markets = df_night_markets.replace({np.nan: None})
+        # 填補空值
+        df_night_markets = df_night_markets.replace({np.nan: None})
 
-    # 爬蟲難免有重複取得之資料，做去重
-    df_night_markets = df_night_markets.drop_duplicates(keep="first")
-
-    print(f"Successfully completed the night market dataframe!")
-    return df_night_markets
-
-
-# 轉出夜市資訊清單
-night_market_info_list = read_googlemap_responsed_json(jsonfile_path)
-# 清洗夜市數據、生成df
-df_fact_night_markets = t_fact_night_markets(night_market_info_list, cities_per_region)
-
-if __name__ == "__main__":
-    # 測試區
-    # 轉出夜市資訊清單
-    night_market_info_list = read_googlemap_responsed_json(jsonfile_path)
-
-    # 清洗夜市數據、生成df
-    t_fact_night_markets(night_market_info_list, cities_per_region, 5)
+        # 爬蟲難免有重複取得之資料，做去重
+        df_night_markets = df_night_markets.drop_duplicates(keep="first")
+        print(f"Successfully cleaned the records of the No.{i}~{i+batch_size} potential night market...")
+        l_fact_night_markets(df_night_markets, database)
+    return None
