@@ -6,8 +6,8 @@ from sqlalchemy import text
 from datetime import datetime, timedelta, timezone
 from src.util.table_column_map import fact_accident_human_col_origin_map
 from src.util.get_table_from_sql_server import get_table_from_sqlserver
-from src.task.e_crawling_traffic_accident import (e_crawling_historical_traffic_accident,
-                                                  e_crawling_latest_traffic_accident)
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
@@ -20,7 +20,13 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
 
         # 擷取需要的欄位
         required_columns = [k for k in fact_accident_human_col_origin_map.keys()]
-        df = df.loc[:, required_columns]
+        matched_columns = [m for m in required_columns if m in df.columns]
+        unmatched_columns = [u for u in required_columns if u not in df.columns]
+        df = df.loc[:, matched_columns]
+
+        # 初始化應存在但沒有存在的欄位，並先賦予None
+        for new_col in unmatched_columns:
+            df[new_col] = None
 
         # 重新命名欄位
         renamed_required_columns = [fact_accident_human_col_origin_map[k] for k in required_columns]
@@ -115,33 +121,3 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
     df_fact_accident_human = df_fact_accident_human.replace({np.nan: None})
 
     return df_fact_accident_human
-
-
-df_fact_accident_human = t_fact_accident_human(csvfile_paths=["/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A1交通事故資料.csv",
-                                                              "/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A2交通事故資料_5.csv"])
-
-
-if __name__ == "__main__":
-    # 測試區
-    # # 指定要爬取的網址
-    # historical_years_urls = ["https://data.gov.tw/dataset/158865",  # 2021
-    #                          "https://data.gov.tw/dataset/177136"]  # 2025
-    # this_year_A1_url = ["https://data.gov.tw/dataset/12818"]  # 2026A1
-    # this_year_A2_url = ["https://data.gov.tw/dataset/13139"]  # 2026A2
-
-    # # 準備headers
-    # headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    #            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"}
-
-    # historical_csvfile_paths = e_crawling_historical_traffic_accident(historical_years_urls,
-    #                                                                   headers)
-    # this_year_csvfile_paths = e_crawling_latest_traffic_accident(this_year_A1_url,
-    #                                                              this_year_A2_url,
-    #                                                              headers)
-    # print("歷年資料的csv檔案路徑列表: ", historical_csvfile_paths)
-    # print("今年資料的csv檔案路徑列表: ", this_year_csvfile_paths)
-
-    df_fact_accident_human = t_fact_accident_human(csvfile_paths=["/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A1交通事故資料.csv",
-                                                                  "/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A2交通事故資料_5.csv"])
-    print(df_fact_accident_human.head())
-    print(df_fact_accident_human.info())

@@ -1,7 +1,8 @@
 import pandas as pd
 from sqlalchemy import text
 from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql
-from src.task.t_fact_accident_human import df_fact_accident_human
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def l_fact_accident_human(df_fact_accident_human: pd.DataFrame,
@@ -35,6 +36,7 @@ def l_fact_accident_human(df_fact_accident_human: pd.DataFrame,
         print(f"Error on inserting into table, Error msg: {e}")
         if conn:
             conn.rollback()
+        raise AirflowException
     else:
         print(f"====Successfully inserting into table `fact_accident_human`====")
     finally:
@@ -42,8 +44,3 @@ def l_fact_accident_human(df_fact_accident_human: pd.DataFrame,
             cursor.close()
             conn.close()
     return None
-
-
-if __name__ == "__main__":
-    # 測試區
-    l_fact_accident_human(df_fact_accident_human, "traffic_accidents")

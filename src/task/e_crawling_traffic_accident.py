@@ -5,7 +5,8 @@ import urllib3
 import zipfile
 import re
 from datetime import datetime
-from src.util.validate_csv_encoding import validate_csv_encoding
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 # 指定要爬取的網址
 historical_years_urls = ["https://data.gov.tw/dataset/158865",  # 2021
@@ -44,15 +45,19 @@ def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
         except requests.exceptions.Timeout as e:
             print(f"Timeout occurred while fetching download links from {url}, "
                   f"error: {e}")
+            raise AirflowException
         except requests.exceptions.ConnectionError as e:
             print(f"Connection error occurred while fetching download links from {url},"
                   f"error: {e}")
+            raise AirflowException
         except requests.exceptions.HTTPError as e:
             print(f"HTTP error occurred while fetching download links from {url},"
                   f"error: {e}")
+            raise AirflowException
         except Exception as e:
             print(f"An error occurred while fetching download links from {url},"
                   f"error: {e}")
+            raise AirflowException
         else:
             # Only process if soup was successfully created
             if soup is not None:
@@ -107,7 +112,7 @@ def download_and_extract_zip(download_link: str, zipfile_save_dir: str | Path,
             return None
     except Exception as e:
         print(f"下載或儲存zip檔案過程中發生錯誤: {e}")
-        return None
+        raise AirflowException
     else:
         print(f"====成功下載並儲存zip檔案至: {str(zipfile_path)}====")
 
@@ -149,7 +154,7 @@ def download_and_extract_zip(download_link: str, zipfile_save_dir: str | Path,
 
     except Exception as e:
         print(f"解壓縮zip檔或存成csv檔的過程中發生錯誤: {e}")
-        return None
+        raise AirflowException
 
 
 def download_csv(download_link: str, csvfile_name: str,
@@ -187,7 +192,7 @@ def download_csv(download_link: str, csvfile_name: str,
             return None
     except Exception as e:
         print(f"下載或儲存csv檔案過程中發生錯誤: {e}")
-        return None
+        raise AirflowException
     else:
         csvfile_pathlist.append(str(csvfile_path))
         print(f"====成功下載並儲存csv檔案至: {str(csvfile_path)}====")
@@ -220,13 +225,14 @@ def e_crawling_historical_traffic_accident(historical_years_urls: list[str],
 
     # 爬取歷年資料
     historical_download_links = find_download_links(historical_years_urls, headers)
+    csvfile_paths_historical = []
     for download_link, (file_type, page_topic) in historical_download_links.items():
         zipfile_name = f"{page_topic}_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
-        csvfile_paths_historical = download_and_extract_zip(download_link,
-                                                            raw_data_save_dir,
-                                                            zipfile_name,
-                                                            processed_data_save_dir)
-
+        csvfile_paths_a_hist_year = download_and_extract_zip(download_link,
+                                                             raw_data_save_dir,
+                                                             zipfile_name,
+                                                             processed_data_save_dir)
+        csvfile_paths_historical.extend(csvfile_paths_a_hist_year)
     # validate_csv_encoding(csvfile_paths_historical)
     return csvfile_paths_historical
 
@@ -261,41 +267,24 @@ def e_crawling_latest_traffic_accident(A1_url: list[str], A2_url: list[str],
     # 爬取今年A1A2資料
     this_year_A1A2_url = A1_url + A2_url
     this_year_download_links = find_download_links(this_year_A1A2_url, headers)
+    csvfile_paths_this_year = []
     for download_link, (file_type, page_topic) in this_year_download_links.items():
         file_type = file_type.lower()
         if file_type == "csv":
             csvfile_name = f"{page_topic}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
-            csvfile_paths_this_year = download_csv(download_link, csvfile_name,
-                                                   raw_data_save_dir)
+            csvfile_paths_this_year_c = download_csv(download_link, csvfile_name,
+                                                     raw_data_save_dir)
+            csvfile_paths_this_year.extend(csvfile_paths_this_year_c)
+
         elif file_type == "zip":
             zipfile_name = f"{page_topic}_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
-            csvfile_paths_this_year = download_and_extract_zip(download_link,
-                                                               raw_data_save_dir,
-                                                               zipfile_name,
-                                                               processed_data_save_dir)
+            csvfile_paths_this_year_z = download_and_extract_zip(download_link,
+                                                                 raw_data_save_dir,
+                                                                 zipfile_name,
+                                                                 processed_data_save_dir)
+            csvfile_paths_this_year.extend(csvfile_paths_this_year_z)
+
         else:
             print(f"錯誤: 找到的檔案類型 {file_type} 不受支援，無法下載。")
             continue
-    # validate_csv_encoding(csvfile_paths_this_year)
     return csvfile_paths_this_year
-
-
-if __name__ == "__main__":
-    # 測試區
-    # 指定要爬取的網址
-    historical_years_urls = ["https://data.gov.tw/dataset/158865",  # 2021
-                             "https://data.gov.tw/dataset/177136"]  # 2025
-    this_year_A1_url = ["https://data.gov.tw/dataset/12818"]  # 2026A1
-    this_year_A2_url = ["https://data.gov.tw/dataset/13139"]  # 2026A2
-
-    # 準備headers
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"}
-
-    historical_csvfile_paths = e_crawling_historical_traffic_accident(historical_years_urls,
-                                                                      headers)
-    this_year_csvfile_paths = e_crawling_latest_traffic_accident(this_year_A1_url,
-                                                                 this_year_A2_url,
-                                                                 headers)
-    print("歷年資料的csv檔案路徑列表: ", historical_csvfile_paths)
-    print("今年資料的csv檔案路徑列表: ", this_year_csvfile_paths)

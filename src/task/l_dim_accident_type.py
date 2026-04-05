@@ -1,7 +1,8 @@
 import pandas as pd
 from sqlalchemy import text
 from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql
-from src.task.t_dim_accident_type import df_dim_accident_type
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def l_dim_accident_type(df_dim_accident_type: pd.DataFrame,
@@ -36,6 +37,7 @@ def l_dim_accident_type(df_dim_accident_type: pd.DataFrame,
         print(f"Error on inserting into table, Error msg: {e}")
         if conn:
             conn.rollback()
+        raise AirflowException
     else:
         print(f"====Successfully inserting into table `dim_accident_type`====")
     finally:
@@ -43,8 +45,3 @@ def l_dim_accident_type(df_dim_accident_type: pd.DataFrame,
             cursor.close()
             conn.close()
     return None
-
-
-if __name__ == "__main__":
-    # 測試區
-    l_dim_accident_type(df_dim_accident_type, "traffic_accidents")

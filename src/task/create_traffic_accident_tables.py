@@ -1,5 +1,7 @@
 from sqlalchemy import text, Engine
 from src.util.create_db_engine_or_database import create_engine_to_mysql, create_database
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def create_traffic_accident_tables(engine: Engine) -> None:
@@ -156,12 +158,6 @@ def create_traffic_accident_tables(engine: Engine) -> None:
 
     except Exception as e:
         print(f"An error occurred while creating the table: {e}")
+        raise AirflowException
     finally:
         engine.dispose()
-
-
-if __name__ == "__main__":
-    engine = create_engine_to_mysql()
-    create_database(engine, "traffic_accidents")
-    engine = create_engine_to_mysql("traffic_accidents")
-    create_traffic_accident_tables(engine)

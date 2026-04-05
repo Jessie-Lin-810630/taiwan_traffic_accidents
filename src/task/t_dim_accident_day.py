@@ -2,6 +2,9 @@ from datetime import datetime, timedelta, timezone
 import calendar
 import pandas as pd
 import numpy as np
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
+
 
 WEEKDAY_NAME_MAP = {"en": list(calendar.day_name),  # Monday Tuesday, Wednesday...
                     "zh_tw": ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"], }
@@ -105,21 +108,3 @@ def t_data_for_dim_accident_day(start_date: str,
                                                  1, 0)
 
     return df_dim_accident_day
-
-
-start = datetime(2024, 1, 1, tzinfo=timezone(timedelta(hours=8)))  # 台灣時區
-end = datetime(2025, 12, 31, tzinfo=timezone(timedelta(hours=8)))
-df_dim_accident_day = t_data_for_dim_accident_day(start_date=start.strftime("%Y-%m-%d"),
-                                                  end_date=end.strftime("%Y-%m-%d"),
-                                                  taiwan_national_activities=taiwan_national_activities,
-                                                  )
-
-
-if __name__ == "__main__":
-    # 測試區
-    start = datetime(2024, 1, 1, tzinfo=timezone(timedelta(hours=8)))  # 台灣時區
-    end = datetime(2025, 12, 31, tzinfo=timezone(timedelta(hours=8)))
-    df_dim_accident_day = t_data_for_dim_accident_day(start_date=start.strftime("%Y-%m-%d"),
-                                                      end_date=end.strftime("%Y-%m-%d"),
-                                                      taiwan_national_activities=taiwan_national_activities,
-                                                      )

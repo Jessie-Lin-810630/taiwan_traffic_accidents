@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 import pandas as pd
 from datetime import datetime
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 # 指定要爬取的網址
 night_markets_wiki_url = "https://zh.wikipedia.org/zh-tw/%E8%87%BA%E7%81%A3%E5%A4%9C%E5%B8%82%E5%88%97%E8%A1%A8"
@@ -61,15 +63,19 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
     except requests.exceptions.Timeout as e:
         print(f"Timeout occurred while fetching from {url}, "
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.ConnectionError as e:
         print(f"Connection error occurred while fetching from {url},"
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.HTTPError as e:
         print(f"HTTP error occurred while fetching from {url},"
               f"error: {e}")
+        raise AirflowException
     except Exception as e:
         print(f"An error occurred while fetching from {url},"
               f"error: {e}")
+        raise AirflowException
     else:
         if soup is not None:
             regionlst = []
@@ -151,15 +157,19 @@ def search_place_id(place_name: str) -> None | str:
     except requests.exceptions.Timeout as e:
         print(f"Timeout occurred while fetching from {place_name}, "
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.ConnectionError as e:
         print(f"Connection error occurred while fetching from {place_name},"
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.HTTPError as e:
         print(f"HTTP error occurred while fetching from {place_name},"
               f"error: {e}")
+        raise AirflowException
     except Exception as e:
         print(f"An error occurred while fetching from {place_name},"
               f"error: {e}")
+        raise AirflowException
     else:
         data = response.json()
         if data.get("candidates"):
@@ -193,21 +203,24 @@ def get_place_details(place_id: str) -> dict | None:
     except requests.exceptions.Timeout as e:
         print(f"Timeout occurred while fetching from {place_id}, "
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.ConnectionError as e:
         print(f"Connection error occurred while fetching from {place_id},"
               f"error: {e}")
+        raise AirflowException
     except requests.exceptions.HTTPError as e:
         print(f"HTTP error occurred while fetching from {place_id},"
               f"error: {e}")
+        raise AirflowException
     except Exception as e:
         print(f"An error occurred while fetching from {place_id},"
               f"error: {e}")
+        raise AirflowException
     else:
         return response.json()
-    return None
 
 
-def e_crawling_nightmarket(csvfile_path: str | Path) -> str | None:
+def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
     """
     Extracting data:
     Open the csv file that containing the night market name.
@@ -218,12 +231,12 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str | None:
     :param csvfile_path: csv file path to open.
     :type csvfile_path: str | Path
 
-    :returns: If requests.Exception,no founding ID/details or file I/O exceptioon, 
-    it will return None. Otherwise, the path of generated json file is returned.
-    :rtype: str | None
+    :returns: If requests.Exception,no founding ID/details or file I/O exceptioon. 
+    Otherwise, the path of generated json file is returned.
+    :rtype: str | Path
     """
     if not API_KEY:
-        return "找不到 API 金鑰，請確認 .env 檔"
+        raise AirflowException("找不到 API 金鑰，請確認 .env 檔")
 
     # 讀取csv，取得所有夜市名稱
     df_markets = pd.read_csv(Path(csvfile_path), sep=",")
@@ -264,14 +277,9 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str | None:
             json.dump(all_details_json, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print(f"Error on writing into JSON file. {e}")
-        return None
+        raise AirflowException
     else:
         print(f"全部夜市地理資訊已成功輸出到：{jsonfile_name}，"
               f"總計找到了: {len(all_details_json)}個夜市資訊。"
               f"失敗率: {(len(failure_detail_list) + len(failure_id_list))} / {len(nm_names)}")
-        return jsonfile_name
-
-
-if __name__ == "__main__":
-    night_market_list_csv = find_tw_night_markets_list(night_markets_wiki_url, headers, cities_per_region)
-    # e_crawling_nightmarket(night_market_list_csv)
+        return str(jsonfile_name)

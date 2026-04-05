@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from src.util.table_column_map import dim_lane_design_col_map
-from src.task.e_crawling_traffic_accident import (e_crawling_historical_traffic_accident,
-                                                  e_crawling_latest_traffic_accident)
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def t_dim_lane_design(csvfile_paths: list[str]) -> pd.DataFrame:
@@ -46,30 +46,3 @@ def t_dim_lane_design(csvfile_paths: list[str]) -> pd.DataFrame:
                                                                    "lane_edge_marking"])
     df_dim_lane_design = df_dim_lane_design.reset_index(drop=True, inplace=False)
     return df_dim_lane_design
-
-
-df_dim_lane_design = t_dim_lane_design(csvfile_paths=["/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A1交通事故資料.csv",
-                                                      "/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A2交通事故資料_5.csv"])
-
-
-if __name__ == "__main__":
-    # 測試區
-    # # 指定要爬取的網址
-    # historical_years_urls = ["https://data.gov.tw/dataset/158865",  # 2021
-    #                          "https://data.gov.tw/dataset/177136"]  # 2025
-    # this_year_A1_url = ["https://data.gov.tw/dataset/12818"]  # 2026A1
-    # this_year_A2_url = ["https://data.gov.tw/dataset/13139"]  # 2026A2
-
-    # # 準備headers
-    # headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    #            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"}
-
-    # historical_csvfile_paths = e_crawling_historical_traffic_accident(historical_years_urls,
-    #                                                                   headers)
-    # this_year_csvfile_paths = e_crawling_latest_traffic_accident(this_year_A1_url,
-    #                                                              this_year_A2_url,
-    #                                                              headers)
-    # print("歷年資料的csv檔案路徑列表: ", historical_csvfile_paths)
-    # print("今年資料的csv檔案路徑列表: ", this_year_csvfile_paths)
-    df_dim_lane_design = t_dim_lane_design(csvfile_paths=["/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A1交通事故資料.csv",
-                                                          "/Users/little_po/Desktop/Project/04_Traffic_accidents/taiwan_traffic_accidents/test/processed_data/114年度A2交通事故資料_5.csv"])

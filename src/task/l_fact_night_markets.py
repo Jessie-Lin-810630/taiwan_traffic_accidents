@@ -2,7 +2,8 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import datetime
 from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql
-from src.task.t_fact_night_markets import df_fact_night_markets
+from airflow.models import Variable
+from airflow.exceptions import AirflowException
 
 
 def l_fact_night_markets(df_fact_night_markets: pd.DataFrame,
@@ -40,6 +41,7 @@ def l_fact_night_markets(df_fact_night_markets: pd.DataFrame,
         print(f"Error on inserting into table, Error msg: {e}")
         if conn:
             conn.rollback()
+        raise AirflowException
     else:
         print(f"====Successfully inserting into table `fact_night_markets`====")
     finally:
@@ -47,8 +49,3 @@ def l_fact_night_markets(df_fact_night_markets: pd.DataFrame,
             cursor.close()
             conn.close()
     return None
-
-
-if __name__ == "__main__":
-    # 測試區
-    l_fact_night_markets(df_fact_night_markets, "traffic_accidents")
