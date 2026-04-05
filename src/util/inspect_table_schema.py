@@ -41,10 +41,3 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
     else:
         print(result)
         return None
-
-
-if __name__ == "__main__":
-    # 測試用
-    inspect_table(engine, "traffic_accidents", "dim_accident_day")  # 正常
-
-    inspect_table(engine, "traffic_accidents", "dim_accident_days")  # 應報錯Error 1146

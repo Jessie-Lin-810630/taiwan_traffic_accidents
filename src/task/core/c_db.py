@@ -94,14 +94,3 @@ def get_accident_table_pedestrian_involved_in(dql_str: str | None = None,
                                         SELECT * FROM analysis_pesdestrian_involving_accident;
                                                                """, database="traffic_accidents")
     return df_pesdestrian_involving_accident
-
-
-if __name__ == "__main__":
-    # 測試區
-    # df = get_accident_table_with_main_day()
-    # df = get_accident_table_with_main_day((2025, 1, 2), (2025, 3, 31))
-    # print(df["tooltip_text"].head())
-    # print(get_accident_table_with_env().head())
-    # print(get_accident_table_with_human().head())
-    # print(get_night_markets_table().head())
-    print(get_accident_table_caused_by_pedestrian().info())

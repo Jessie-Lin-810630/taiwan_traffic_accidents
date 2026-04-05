@@ -459,15 +459,3 @@ def aggregate_national_master(batch_keys: list[dict]):
             delete_cache(key)
     else:
         print("無法聚合全台總表 (all_dfs為空)，沒有找到任何快取資料。")
-
-
-if __name__ == "__main__":
-    # print(get_accident_heatmap_data(100).head())
-    # print(get_pedestrian_stats_by_region_monthly().info())
-    # print(get_pedestrian_trend().info())
-    # print(get_all_nightmarkets().info())
-    market_batch_keys = get_and_slice_nightmarkets_multibatches()
-    for key in market_batch_keys:
-        cal_result = cal_accidents_nearby_nightmarket(key)
-    # process_tasks = cal_accidents_nearby_nightmarket.expand(batch_key=market_batch_keys)
-    aggregate_national_master(market_batch_keys)

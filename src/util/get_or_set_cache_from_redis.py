@@ -39,8 +39,3 @@ def delete_cache(key: str) -> None:
         r.delete(key)
     except Exception as e:
         print(f"Redis刪除{key}失敗: {e}")
-
-
-if __name__ == "__main__":
-    df = pd.DataFrame([[1, 2, 3, 5], [4, 5, 7, 1]])
-    set_cache("test_key", df, 300)
