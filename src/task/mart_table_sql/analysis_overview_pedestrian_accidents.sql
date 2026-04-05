@@ -88,7 +88,7 @@ CREATE OR REPLACE VIEW v3_factmain_v2human AS
 CREATE OR REPLACE VIEW v4_v3_dimday_factenv_v1 AS
 	(SELECT v3.accident_id, 
 			YEAR(d.accident_date) AS `accident_year`, 
-            DATE_FORMAT(d.accident_date, "%%Y-%%m") AS `accident_yearmonth`, -- 如果不是直接在MySQL環境下互動，只需打"%Y-%m"
+            DATE_FORMAT(d.accident_date, "%Y-%m") AS `accident_yearmonth`, -- 如果不是直接在MySQL環境下互動，只需打"%Y-%m"
             d.accident_date,
             d.accident_weekday,
             d.is_holiday,
@@ -127,11 +127,83 @@ CREATE OR REPLACE VIEW v4_v3_dimday_factenv_v1 AS
 
 
 -- 3. 拆成 只有肇事順位一 與 不分肇事順位 兩張表，並存成實體analysis用途表
-DROP TABLE IF EXISTS analysis_pesdestrian_causing_accident;
-CREATE TABLE IF NOT EXISTS analysis_pesdestrian_causing_accident
-	AS (SELECT * FROM v4_v3_dimday_factenv_v1 WHERE is_primary_party_sequence = 1);
+-- 套用安全替換資料表(table swap)流程，使用RENAME完成原子操作。避免查詢服務被中斷失敗。
+-- DELIMITER $$
+
+CREATE PROCEDURE swap_analysis_table()
+BEGIN
+	-- 宣告變數table_exists，初始化值為0
+    DECLARE table_exists INT DEFAULT 0;
+
+    -- 建立 tmp 表
+    CREATE TABLE IF NOT EXISTS analysis_pesdestrian_causing_accident_tmp
+		AS (SELECT * 
+				FROM v4_v3_dimday_factenv_v1 
+					WHERE is_primary_party_sequence = 1);
 
 
-DROP TABLE IF EXISTS analysis_pesdestrian_involving_accident;
-CREATE TABLE IF NOT EXISTS analysis_pesdestrian_involving_accident
-	AS (SELECT * FROM v4_v3_dimday_factenv_v1);
+    -- 檢查正式表(非_tmp表)是否存在，並將查詢結果寫入table_exists，如果存在，count(*)會是1
+    SELECT COUNT(*) INTO table_exists
+    	FROM information_schema.tables
+    		WHERE table_schema = DATABASE()
+      			AND table_name = "analysis_pesdestrian_causing_accident";
+
+
+    -- IF/ELSE條件判斷
+    IF table_exists > 0 THEN
+
+        -- 如果存在做table swap
+        RENAME TABLE 
+            analysis_pesdestrian_causing_accident TO analysis_pesdestrian_causing_accident_deprecated,
+            analysis_pesdestrian_causing_accident_tmp TO analysis_pesdestrian_causing_accident;
+
+        -- 交換完以後、刪掉舊表
+        DROP TABLE analysis_pesdestrian_causing_accident_deprecated;
+
+    ELSE
+        -- 如果不存在直接rename tmp表為正式表
+        RENAME TABLE 
+            analysis_pesdestrian_causing_accident_tmp TO analysis_pesdestrian_causing_accident;
+    END IF;
+
+END;
+
+-- DELIMITER ;
+
+-- DELIMITER %%
+CREATE PROCEDURE swap_analysis_table2()
+BEGIN
+	DECLARE table_exists2 INT DEFAULT 0;
+
+	CREATE TABLE IF NOT EXISTS analysis_pesdestrian_involving_accident_tmp
+		AS (SELECT * FROM v4_v3_dimday_factenv_v1);
+
+	SELECT count(*) INTO table_exists2
+		FROM information_schema.tables
+			WHERE table_schema = DATABASE()
+				AND table_name = "analysis_pesdestrian_involving_accident";
+
+	IF table_exists2 > 0 THEN
+		RENAME TABLE 
+			analysis_pesdestrian_involving_accident TO analysis_pesdestrian_involving_accident_deprecated,
+			analysis_pesdestrian_involving_accident_tmp TO analysis_pesdestrian_involving_accident;
+	
+	ELSE
+		RENAME TABLE
+			analysis_pesdestrian_involving_accident_tmp TO analysis_pesdestrian_involving_accident;
+	
+	END IF;
+END;
+
+-- DELIMITER ;
+
+CALL swap_analysis_table();
+CALL swap_analysis_table2();
+DROP TABLE IF EXISTS analysis_pesdestrian_causing_accident_deprecated;
+DROP TABLE IF EXISTS analysis_pesdestrian_involving_accident_deprecated;
+
+DROP VIEW IF EXISTS v1_dim_accident_type, v2_fact_accident_human, 
+		   			v3_factmain_v2human, v4_v3_dimday_factenv_v1;
+
+DROP PROCEDURE IF EXISTS swap_analysis_table;
+DROP PROCEDURE IF EXISTS swap_analysis_table2;

@@ -27,7 +27,13 @@ CREATE OR REPLACE VIEW v4_accident_human_vehicle_rn1_main_day AS
 				ON v3.day_id = d.day_id);
 
 -- 3. 建立Mart層圖表
-CREATE TABLE IF NOT EXISTS mart_monthly_pedestrian_dj AS
+CREATE PROCEDURE swap_analysis_table()
+BEGIN
+	-- 宣告變數table_exists，初始化值為0
+    DECLARE table_exists INT DEFAULT 0;
+
+
+	CREATE TABLE IF NOT EXISTS mart_monthly_pedestrian_dj_tmp AS
 	(SELECT
 		YEAR(accident_date) AS `year`,
 		QUARTER(accident_date) AS `quarter`,
@@ -39,43 +45,70 @@ CREATE TABLE IF NOT EXISTS mart_monthly_pedestrian_dj AS
 					ORDER BY `year`, `quarter`);
 
 
-ALTER TABLE mart_monthly_pedestrian_dj
-	ADD COLUMN (
-				avg_monthly_death_btw_2021_2025 DECIMAL(10,1), 
-				stdev_monthly_death_btw_2021_2025 DECIMAL(10,1),
-				avg_monthly_injury_btw_2021_2025 DECIMAL(10,1),
-				stdev_monthly_injury_btw_2021_2025 DECIMAL(10,1),
-				`avg+stdev_monthly_death_btw_2021_2025` DECIMAL(10,1),
-				`avg-stdev_monthly_death_btw_2021_2025` DECIMAL(10,1),
-				`avg+stdev_monthly_injury_btw_2021_2025` DECIMAL(10,1),
-				`avg-stdev_monthly_injury_btw_2021_2025` DECIMAL(10,1)
-				);
+	ALTER TABLE mart_monthly_pedestrian_dj_tmp
+		ADD COLUMN (
+					avg_monthly_death_btw_2021_2025 DECIMAL(10,1), 
+					stdev_monthly_death_btw_2021_2025 DECIMAL(10,1),
+					avg_monthly_injury_btw_2021_2025 DECIMAL(10,1),
+					stdev_monthly_injury_btw_2021_2025 DECIMAL(10,1),
+					`avg+stdev_monthly_death_btw_2021_2025` DECIMAL(10,1),
+					`avg-stdev_monthly_death_btw_2021_2025` DECIMAL(10,1),
+					`avg+stdev_monthly_injury_btw_2021_2025` DECIMAL(10,1),
+					`avg-stdev_monthly_injury_btw_2021_2025` DECIMAL(10,1)
+					);
 
-SELECT
-	@avg_death := AVG(death_monthly_total),
-    @stdev_death := STDDEV(death_monthly_total),
-    @avg_injury := AVG(injury_monthly_total),
-    @stdev_injury := STDDEV(injury_monthly_total),
-	@`avg+sd_death` := AVG(death_monthly_total) + STDDEV(death_monthly_total),
-    @`avg-sd_death` := AVG(death_monthly_total) - STDDEV(death_monthly_total),
-    @`avg+sd_injury` := AVG(injury_monthly_total) + STDDEV(injury_monthly_total),
-    @`avg-sd_injury` := AVG(injury_monthly_total) - STDDEV(injury_monthly_total)
-	FROM mart_monthly_pedestrian_dj
-	WHERE `year` BETWEEN 2021 AND 2025;
+	SELECT
+		@avg_death := AVG(death_monthly_total),
+		@stdev_death := STDDEV(death_monthly_total),
+		@avg_injury := AVG(injury_monthly_total),
+		@stdev_injury := STDDEV(injury_monthly_total),
+		@`avg+sd_death` := AVG(death_monthly_total) + STDDEV(death_monthly_total),
+		@`avg-sd_death` := AVG(death_monthly_total) - STDDEV(death_monthly_total),
+		@`avg+sd_injury` := AVG(injury_monthly_total) + STDDEV(injury_monthly_total),
+		@`avg-sd_injury` := AVG(injury_monthly_total) - STDDEV(injury_monthly_total)
+		FROM mart_monthly_pedestrian_dj_tmp
+		WHERE `year` BETWEEN 2021 AND 2025;
 
-UPDATE mart_monthly_pedestrian_dj
-	SET 
-		avg_monthly_death_btw_2021_2025 = @avg_death,
-		stdev_monthly_death_btw_2021_2025 = @stdev_death,
-		avg_monthly_injury_btw_2021_2025 = @avg_injury,
-		stdev_monthly_injury_btw_2021_2025 = @stdev_injury,
-		`avg+stdev_monthly_death_btw_2021_2025` = @`avg+sd_death`,
-		`avg-stdev_monthly_death_btw_2021_2025` = @`avg-sd_death`,
-		`avg+stdev_monthly_injury_btw_2021_2025` = @`avg+sd_injury`,
-		`avg-stdev_monthly_injury_btw_2021_2025` = @`avg-sd_injury`;
+	UPDATE mart_monthly_pedestrian_dj_tmp
+		SET 
+			avg_monthly_death_btw_2021_2025 = @avg_death,
+			stdev_monthly_death_btw_2021_2025 = @stdev_death,
+			avg_monthly_injury_btw_2021_2025 = @avg_injury,
+			stdev_monthly_injury_btw_2021_2025 = @stdev_injury,
+			`avg+stdev_monthly_death_btw_2021_2025` = @`avg+sd_death`,
+			`avg-stdev_monthly_death_btw_2021_2025` = @`avg-sd_death`,
+			`avg+stdev_monthly_injury_btw_2021_2025` = @`avg+sd_injury`,
+			`avg-stdev_monthly_injury_btw_2021_2025` = @`avg-sd_injury`;
+
+	-- 檢查正式表(非_tmp表)是否存在，並將查詢結果寫入table_exists，如果存在，count(*)會是1
+    SELECT COUNT(*) INTO table_exists
+    	FROM information_schema.tables
+    		WHERE table_schema = DATABASE()
+      			AND table_name = "mart_monthly_pedestrian_dj";
 
 
-DROP VIEW v1_accident_human_vehicle;
-DROP VIEW v2_accident_human_vehicle_rn1;
-DROP VIEW v3_accident_human_vehicle_rn1_main;
-DROP VIEW v4_accident_human_vehicle_rn1_main_day;
+    -- IF/ELSE條件判斷
+    IF table_exists > 0 THEN
+
+        -- 如果存在做table swap
+        RENAME TABLE 
+            mart_monthly_pedestrian_dj TO mart_monthly_pedestrian_dj_deprecated,
+            mart_monthly_pedestrian_dj_tmp TO mart_monthly_pedestrian_dj;
+
+        -- 交換完以後、刪掉舊表
+        DROP TABLE mart_monthly_pedestrian_dj_deprecated;
+
+    ELSE
+        -- 如果不存在直接rename tmp表為正式表
+        RENAME TABLE 
+            mart_monthly_pedestrian_dj_tmp TO mart_monthly_pedestrian_dj;
+    END IF;
+END;
+
+CALL swap_analysis_table();
+DROP TABLE IF EXISTS mart_monthly_pedestrian_dj_deprecated;
+
+DROP VIEW IF EXISTS v1_accident_human_vehicle, v2_accident_human_vehicle_rn1,
+		  v3_accident_human_vehicle_rn1_main, v4_accident_human_vehicle_rn1_main_day;
+
+DROP PROCEDURE IF EXISTS swap_analysis_table;

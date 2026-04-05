@@ -65,7 +65,15 @@ CREATE OR REPLACE VIEW v4_humansq1_main_type_day_group AS
 		FROM v3_humansq1_main_type_day;
 
 -- 3. 逐年計算各年齡區間的平均年齡(男女分開計算)、各車種駕駛人平均年齡(各年齡層分開計算)，正式存成Mart層
-CREATE TABLE IF NOT EXISTS mart_monthly_partyA_road_user_features AS
+
+
+CREATE PROCEDURE swap_analysis_table()
+BEGIN
+	-- 宣告變數table_exists，初始化值為0
+    DECLARE table_exists INT DEFAULT 0;
+
+    -- 建立 tmp 表
+    CREATE TABLE IF NOT EXISTS mart_monthly_partyA_road_user_features_tmp AS
 	WITH partitioned_avgs AS (
 		SELECT 
 				accident_year,
@@ -101,4 +109,32 @@ CREATE TABLE IF NOT EXISTS mart_monthly_partyA_road_user_features AS
 						 accident_type_major_grouped, `各月度各年齡區間的平均年齡(男女分開計算)`, 
 						 `各月度各車種駕駛人平均年齡(各年齡層分開計算)`;
 
-DROP VIEW v1_humansq1, v2_humansq1_main_type, v3_humansq1_main_type_day, v4_humansq1_main_type_day_group;
+
+
+    -- 檢查正式表(非_tmp表)是否存在，並將查詢結果寫入table_exists，如果存在，count(*)會是1
+    SELECT COUNT(*) INTO table_exists
+    	FROM information_schema.tables
+    		WHERE table_schema = DATABASE()
+      			AND table_name = "mart_monthly_partyA_road_user_features";
+
+
+    -- IF/ELSE條件判斷
+    IF table_exists > 0 THEN
+		RENAME TABLE
+			mmart_monthly_partyA_road_user_features to mart_monthly_partyA_road_user_features_deprecated,
+			mart_monthly_partyA_road_user_features_tmp to mart_monthly_partyA_road_user_features;
+
+	ELSE
+		RENAME TABLE
+			mart_monthly_partyA_road_user_features_tmp to mart_monthly_partyA_road_user_features;
+	END IF;
+END;
+
+CALL swap_analysis_table();
+
+DROP TABLE IF EXISTS mart_monthly_partyA_road_user_features_deprecated;
+
+DROP VIEW IF EXISTS v1_humansq1, v2_humansq1_main_type, 
+					v3_humansq1_main_type_day, v4_humansq1_main_type_day_group;
+
+DROP PROCEDURE IF EXISTS swap_analysis_table;

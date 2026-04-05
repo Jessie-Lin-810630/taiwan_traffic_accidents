@@ -44,27 +44,65 @@ CREATE OR REPLACE VIEW v3_main_v1type_human AS
 				ON h.accident_id = v2.accident_id);
         
 -- 4. 建立Mart層圖表
-CREATE TABLE IF NOT EXISTS mart_quarterly_pedestrian_related_causes_top5 AS
-	-- 使用Common Table Expression語法生成臨時資料表，並宣告為ranked_behaviors資料表
-	WITH ranked_behaviors AS 
-			(SELECT
-						accident_year,
-						accident_quarter,
-						cause_analysis_major_individual_grouped AS `type of road user`,
-						cause_analysis_minor_individual AS `behavior`,
-						COUNT(cause_analysis_minor_individual) as `counts of behavior`,
-						RANK() OVER (
-									  PARTITION BY accident_year, accident_quarter
-									  ORDER BY COUNT(cause_analysis_minor_individual) DESC
-									) as `rank`
-				FROM v3_main_v1type_human
-					GROUP BY accident_year, accident_quarter, `type of road user`, `behavior`
-			  )
-		-- 主查詢區:
-		SELECT  accident_year, accident_quarter, 
-				`type of road user`, `behavior`, `counts of behavior`, `rank`
-			FROM ranked_behaviors
-				WHERE `rank` <= 5
-					ORDER BY  accident_year, accident_quarter, `rank`;
 
-DROP VIEW v1_dim_accident_type, v2_main_v1type, v3_main_v1type_human;
+CREATE PROCEDURE swap_analysis_table()
+BEGIN
+	-- 宣告變數table_exists，初始化值為0
+    DECLARE table_exists INT DEFAULT 0;
+
+    -- 建立 tmp 表
+	CREATE TABLE IF NOT EXISTS mart_quarterly_pedestrian_related_causes_top5_tmp AS
+		-- 使用Common Table Expression語法生成臨時資料表，並宣告為ranked_behaviors資料表
+		WITH ranked_behaviors AS 
+				(SELECT
+							accident_year,
+							accident_quarter,
+							cause_analysis_major_individual_grouped AS `type of road user`,
+							cause_analysis_minor_individual AS `behavior`,
+							COUNT(cause_analysis_minor_individual) as `counts of behavior`,
+							RANK() OVER (
+										PARTITION BY accident_year, accident_quarter
+										ORDER BY COUNT(cause_analysis_minor_individual) DESC
+										) as `rank`
+					FROM v3_main_v1type_human
+						GROUP BY accident_year, accident_quarter, `type of road user`, `behavior`
+				)
+			-- 主查詢區:
+			SELECT  accident_year, accident_quarter, 
+					`type of road user`, `behavior`, `counts of behavior`, `rank`
+				FROM ranked_behaviors
+					WHERE `rank` <= 5
+						ORDER BY  accident_year, accident_quarter, `rank`;
+
+	 -- 檢查正式表(非_tmp表)是否存在，並將查詢結果寫入table_exists，如果存在，count(*)會是1
+    SELECT COUNT(*) INTO table_exists
+    	FROM information_schema.tables
+    		WHERE table_schema = DATABASE()
+      			AND table_name = "mart_quarterly_pedestrian_related_causes_top5";
+
+
+    -- IF/ELSE條件判斷
+    IF table_exists > 0 THEN
+
+        -- 如果存在做table swap
+        RENAME TABLE 
+            mart_quarterly_pedestrian_related_causes_top5 TO mart_quarterly_pedestrian_related_causes_top5_deprecated,
+            mart_quarterly_pedestrian_related_causes_top5_tmp TO mart_quarterly_pedestrian_related_causes_top5;
+
+        -- 交換完以後、刪掉舊表
+        DROP TABLE mart_quarterly_pedestrian_related_causes_top5_deprecated;
+
+    ELSE
+        -- 如果不存在直接rename tmp表為正式表
+        RENAME TABLE 
+            mart_quarterly_pedestrian_related_causes_top5_tmp TO mart_quarterly_pedestrian_related_causes_top5;
+    END IF;
+END;
+
+
+CALL swap_analysis_table();
+DROP TABLE IF EXISTS mart_quarterly_pedestrian_related_causes_top5_deprecated;
+
+DROP VIEW IF EXISTS v1_dim_accident_type, v2_main_v1type, v3_main_v1type_human;
+
+DROP PROCEDURE IF EXISTS swap_analysis_table;

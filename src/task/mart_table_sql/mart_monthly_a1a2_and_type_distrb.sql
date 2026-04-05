@@ -29,6 +29,7 @@ CREATE OR REPLACE VIEW v3_accident_monthly_counts AS
 		GROUP BY accident_year, accident_quarter, accident_month, accident_category);
 
 -- 3-2. 可再建立單一年度下，逐月累計事故案件數量，轉建成Mart表
+DROP TABLE IF EXISTS mart_montly_a1a2_distrb;
 CREATE TABLE IF NOT EXISTS mart_montly_a1a2_distrb AS
 	(SELECT 
 			accident_year,
@@ -71,24 +72,51 @@ CREATE OR REPLACE VIEW v5_accident_main_day_type_grouped_counts AS
         accident_type_major_grouped); 
 
 -- 4.3 可再建立單一年度下，逐月累計事故案件數量，轉建成Mart表
-CREATE TABLE IF NOT EXISTS mart_montly_accident_type_distrb AS
-	(SELECT 
-			accident_year,
-			accident_quarter,
-			accident_month,
-			accident_counts,
-			accident_category,
-            accident_type_major_grouped,
-			SUM(accident_counts) OVER (
-				PARTITION BY accident_year, 
-							 accident_category, 
-                             accident_type_major_grouped
-				ORDER BY accident_month
-			) AS running_counts_monthly
-		FROM v5_accident_main_day_type_grouped_counts);
+CREATE PROCEDURE swap_analysis_table()
+BEGIN
+	DECLARE table_exists INT DEFAULT 0;
 
-DROP VIEW v1_accident_main_day, 
-			v2_accident_main_day_type, 
-			v3_accident_monthly_counts, 
-            v4_accident_main_day_type_grouped,
-			v5_accident_main_day_type_grouped_counts;
+	CREATE TABLE IF NOT EXISTS mart_montly_accident_type_distrb_tmp AS
+		(SELECT 
+				accident_year,
+				accident_quarter,
+				accident_month,
+				accident_counts,
+				accident_category,
+				accident_type_major_grouped,
+				SUM(accident_counts) OVER (
+					PARTITION BY accident_year, 
+								accident_category, 
+								accident_type_major_grouped
+					ORDER BY accident_month
+				) AS running_counts_monthly
+			FROM v5_accident_main_day_type_grouped_counts);
+
+	SELECT count(*) INTO table_exists
+		FROM information_schema.tables
+			WHERE table_schema = DATABASE()
+				AND table_name = "mart_montly_accident_type_distrb";
+
+	IF table_exists > 0 THEN
+		RENAME TABLE
+			mart_montly_accident_type_distrb to mart_montly_accident_type_distrb_deprecated,
+			mart_montly_accident_type_distrb_tmp to mart_montly_accident_type_distrb;
+
+	ELSE
+		RENAME TABLE
+			mart_montly_accident_type_distrb_tmp to mart_montly_accident_type_distrb;
+	END IF;
+END;
+
+
+CALL swap_analysis_table();
+DROP TABLE IF EXISTS mart_montly_accident_type_distrb_deprecated;
+
+DROP VIEW IF EXISTS v1_accident_main_day, 
+					v2_accident_main_day_type, 
+					v3_accident_monthly_counts, 
+					v4_accident_main_day_type_grouped,
+					v5_accident_main_day_type_grouped_counts;
+
+DROP PROCEDURE IF EXISTS swap_analysis_table;
+
