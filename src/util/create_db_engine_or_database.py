@@ -2,19 +2,25 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 import pymysql
 from pymysql import Connection
+from pymysql.constants import CLIENT
 import os
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 import redis
+import sys
+
+if "/opt/airflow" in sys.path:
+    from airflow.models import Variable
+    from airflow.exceptions import AirflowException
 
 load_dotenv()
-host = os.getenv("MYSQL_HOST")
-port = os.getenv("MYSQL_PORT")
-username = quote_plus(os.getenv("MYSQL_USER"))
-password = quote_plus(os.getenv("MYSQL_PASSWORD"))
+host = os.getenv("MYSQL_HOST", "localhost")
+port = os.getenv("MYSQL_PORT", 3306)
+username = os.getenv("MYSQL_USER")
+password = os.getenv("MYSQL_PASSWORD")
 
-redis_host = os.getenv("REDIS_HOST")
-redis_port = os.getenv("REDIS_PORT")
+redis_host = os.getenv("REDIS_HOST", "localhost")
+redis_port = os.getenv("REDIS_PORT", 6379)
 redis_password = os.getenv("REDIS_PASSWORD")
 
 
@@ -63,6 +69,28 @@ def get_pymysql_conn_to_mysql(database: str | None) -> Connection:
     return conn
 
 
+def get_pymysql_conn_to_mysql_multistatement(database: str | None) -> Connection:
+    """Create a pymysql Connection to connect to a MySQL database. More suitable for Upserting
+    than using Pandas.to_sql().
+    Parameters:
+        database (str | None): The name of the database to connect to.
+
+    Returns:
+        Connection: A pymysql Connection instance connected to the specified MySQL database."""
+    conn = pymysql.connect(host=host,
+                           port=int(port),
+                           user=username,
+                           password=password,
+                           database=database,
+                           charset="utf8mb4",
+                           autocommit=False,
+                           connect_timeout=60,      # 連線建立超時
+                           read_timeout=600,        # 讀取超時（適合大查詢）
+                           write_timeout=600,       # 寫入超時
+                           client_flag=CLIENT.MULTI_STATEMENTS)  # 整段腳本寫入
+    return conn
+
+
 def create_database(engine: Engine, database_name: str) -> None:
     """Inspect if the designed database exists and create it if not exists."""
     try:
@@ -72,6 +100,9 @@ def create_database(engine: Engine, database_name: str) -> None:
             print(f"Database '{database_name}' created successfully.")
     except Exception as e:
         print(f"An error occurred while creating the database: {e}")
+        if "/opt/airflow" in sys.path:
+            raise AirflowException
+        raise Exception
     finally:
         engine.dispose()
     return None
@@ -89,6 +120,9 @@ def create_redis_client(decode_response: bool = False):
         r.ping()  # 測試連線
     except Exception as e:
         print(f"Error when connecting to Redis. Error msg: {e}!")
+        if "/opt/airflow" in sys.path:
+            raise AirflowException
+        raise Exception
     else:
         if r is None:
             print("Redis client is None, skipping cache")
