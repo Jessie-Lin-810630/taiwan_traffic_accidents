@@ -77,6 +77,7 @@
 18. Generate the SSH key (the 2nd set) in VM.  
     - 原理是VM得拿著 Deploy Key 向 GitHub 伺服器要代碼。
     ```
+        # gcloud compute ssh進入VM
         ssh-keygen -t ed25519 -C <你自己的gmail帳號>@gmail.com
 
         cat ~/.ssh/id_ed25519 # 取得公鑰

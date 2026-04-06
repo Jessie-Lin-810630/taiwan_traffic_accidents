@@ -13,12 +13,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4 # 步驟1: 讓機器人抓取你的專案代碼、不需要自己進入VM做git clone
 
-      - name: Set up SSH Private Key
+      - name: Set up SSH Private Key # 步驟2: 幫機器人裝上鑰匙，讓它能透過 SSH 敲 VM 的門
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.GCP_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-      # 步驟2: 幫機器人裝上鑰匙，讓它能透過 SSH 敲 VM 的門
+          ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
+          chmod 644 ~/.ssh/id_rsa.pub
 
       # 步驟 3: 登入 Google Cloud
       - name: Google Auth
@@ -39,6 +40,7 @@ jobs:
             --tunnel-through-iap \
             --project=${{ secrets.GCP_PROJECT_ID }} \
             --ssh-key-file=~/.ssh/id_rsa \
+            --quie \
             --command="
               cd /home/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents &&
               
