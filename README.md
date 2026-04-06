@@ -40,19 +40,26 @@ The project is organized into four sequential branches. Each branch represents a
 3. planned directories:
     ```
         my-project/
-            ├── dags/                  # + 存放Airflow DAGs
-            ├── docker/                # + 容器定義
+            ├── dags/                       # + 存放Airflow DAGs
+            ├── src/
+            |   ├── pages/                  # (From Branch 1)
+            |   ├── tasks/                  # (From Branch 1)                
+            |   ├── util/                   # (From Branch 1)
+            │   └── app.py                  # (From Branch 1) 
+            ├── sandbox/                    # (From Branch 1) 
+            ├── .env                        # (Revised from Branch 1)容器化環境變數(e.g, DB_HOST=容器名稱)
+            ├── pyproject.toml              # (From Branch 1)
+            ├── poetry.lock                 # (From Branch 1)
+            ├── .gitignore                  # (From Branch 1)存放不需要trace的檔案、檔案類型
+            ├── docker/                     # + 容器定義
             │   ├── Dockerfile.airflow
             │   └── Dockerfile.streamlit
-            ├── src/                   # (From Branch 1)
-            ├── tests/                 # (From Branch 1)
-            ├── docker-compose.yml     # + 一鍵啟動所有容器
-            ├── pyproject.toml         # (From Branch 1)
-            └── requirements.txt       # + 執行poetry export產出
+            ├── docker-compose.yml          # + 一鍵啟動所有容器
+            └── requirements.txt            # + 執行poetry export產出
     ```
 # Branch 3, name: "develop/CI"
 1. core func.: Implement GitHub Actions to automate the build and push processes. This ensures that Docker images are automatically validated and stored in a container registry upon code updates.
-2. sources: all components from Branch 2.
+2. sources: some components from Branch 2.
 3. planned directories:
     ```
         my-project/
