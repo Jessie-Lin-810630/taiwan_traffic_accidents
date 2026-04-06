@@ -40,7 +40,7 @@ jobs:
             --tunnel-through-iap \
             --project=${{ secrets.GCP_PROJECT_ID }} \
             --ssh-key-file=~/.ssh/id_rsa \
-            --quie \
+            --quiet \
             --command="
               cd /home/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents &&
               
