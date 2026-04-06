@@ -1,0 +1,61 @@
+name: Deploy-to-GCP-VM-practice-cicd-tjr104  # 機器人的名字
+
+on:
+  push:
+    branches: [ "develop/CI" ] # 當代碼推送到develop/CI時觸發
+
+jobs:
+  deploy: # 將這一個job名稱命名為deploy
+    runs-on: ubuntu-latest # 機器人跑在 GitHub 提供的 Linux 虛擬機上
+    
+    # 描述deploy job由哪些task組成
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4 # 步驟1: 讓機器人抓取你的專案代碼、不需要自己進入VM做git clone
+
+      - name: Set up SSH Private Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GCP_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+      # 步驟2: 幫機器人裝上鑰匙，讓它能透過 SSH 敲 VM 的門
+
+      # 步驟 3: 登入 Google Cloud
+      - name: Google Auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_JSONKEY }}'
+
+      # 步驟 4: 設定 gcloud SDK
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      # 步驟 5: 透過 IAP 隧道執行遠端指令
+      # 加上 --ssh-key-file 強制指定使用放在~/.ssh/id_rsa的那把鑰匙
+      - name: Deploy via IAP Tunnel
+        run: |
+          gcloud compute ssh ${{ secrets.GCP_SSH_USER }}@${{ secrets.GCP_VM_NAME }} \
+            --zone=${{ secrets.GCP_ZONE }} \
+            --tunnel-through-iap \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --ssh-key-file=~/.ssh/id_rsa \
+            --command="
+              cd /home/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents &&
+              
+              echo 'MYSQL_HOST=${{ secrets.MYSQL_HOST }}' > .env &&
+              echo 'MYSQL_PORT=${{ secrets.MYSQL_PORT }}' >> .env &&
+              echo 'MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}' >> .env &&
+              echo 'MYSQL_USER=${{ secrets.MYSQL_USER }}' >> .env &&
+              echo 'MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}' >> .env &&
+              echo 'MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}' >> .env &&
+              echo 'REDIS_HOST=${{ secrets.REDIS_HOST }}' >> .env &&
+              echo 'REDIS_PORT=${{ secrets.REDIS_PORT }}' >> .env &&
+              echo 'REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}' >> .env &&
+              echo 'STREAMLIT_USER=${{ secrets.STREAMLIT_USER }}' >> .env &&
+              echo 'STREAMLIT_PASSWORD=${{ secrets.STREAMLIT_PASSWORD }}' >> .env &&
+              echo 'GOOGLE_MAP_API_KEY=${{ secrets.GOOGLE_MAP_API_KEY }}' >> .env &&
+              
+              git pull origin develop/CI &&
+              
+              docker compose up -d --build
+            "
