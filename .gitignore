@@ -220,3 +220,5 @@ settings.json
 Taiwan_night_markets_from_map_api_2026-03-25.json
 temp_try*.py
 logs/dag_processor
+logs/dag_*
+causal-inquiry-484423-e7-6abf911b5068.json
