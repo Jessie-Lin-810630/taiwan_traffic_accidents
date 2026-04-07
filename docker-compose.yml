@@ -97,6 +97,10 @@ services:
     <<: *airflow-common # 合併運算子：把整塊模板解壓縮到各個 Service 中。
     container_name: airflow_init
     restart: "no" # 執行完就結束
+    environment:
+      # 暫時覆蓋前言所造的環境變數，讓init可以用root順利登入MySQL，因為我們目標是確認airflow-mysql可以正常連線，而不是因授權問題而被拒絕在外。
+      #
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@mysql-db:3306/${MYSQL_AIRFLOW_DATABASE}
     command: >
       bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
     depends_on:
@@ -108,7 +112,7 @@ services:
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow_webserver
-    command: webserver
+    command: api-server # AirFlow 3.x開始已經改為api-server
     ports: [ "8081:8080" ]
     depends_on:
       airflow-init: { condition: service_completed_successfully }
