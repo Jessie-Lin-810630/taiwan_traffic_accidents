@@ -57,7 +57,7 @@ services:
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_AIRFLOW_DATABASE: ${MYSQL_AIRFLOW_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
@@ -98,7 +98,7 @@ services:
     container_name: airflow_init
     restart: "no" # 執行完就結束
     command: >
-      bash -c "airflow db migrate &&  airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
+      bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
     depends_on:
       mysql-db: { condition: service_healthy }
       redis-cache: { condition: service_healthy }
