@@ -28,7 +28,7 @@ jobs:
       - name: Build and Push Image
         run: |
           IMAGE_TAG="asia-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/traffic-web-service/streamlit-app:latest"
-          docker build -t $IMAGE_TAG .
+          docker build -f docker/Dockerfile.streamlit -t $IMAGE_TAG .
           docker push $IMAGE_TAG
 
   # Job 2: 部署到 Cloud Run 並連接 VPC Connector
