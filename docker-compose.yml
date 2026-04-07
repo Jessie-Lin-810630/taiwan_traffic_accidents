@@ -29,7 +29,7 @@ services:
     container_name: redis_server
     restart: always
     command: >
-      redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 3gb
+      redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 3gb --protected-mode no
     ports:
       - "6379:6379"
     volumes:
