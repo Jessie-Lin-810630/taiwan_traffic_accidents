@@ -11,7 +11,7 @@ jobs:
     # 描述deploy job由哪些task組成
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4 # 步驟1: 讓機器人抓取你的專案代碼、不需要自己進入VM做git clone
+        uses: actions/checkout@v4 # 步驟1: 讓機器人抓取你的程式碼、不需要自己進入VM做git clone
 
       - name: Set up SSH Private Key # 步驟2: 幫機器人裝上鑰匙，讓它能透過 SSH 敲 VM 的門
         run: |
@@ -21,7 +21,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
           chmod 644 ~/.ssh/id_rsa.pub
 
-      # 步驟 3: 登入 Google Cloud
+      # 步驟 3: 登入 Google Cloud，讓gcloud知道機器人有被授權可以使用部分cloud API(取決於SA怎麼設定)
       - name: Google Auth
         uses: 'google-github-actions/auth@v2'
         with:
@@ -31,7 +31,7 @@ jobs:
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
 
-      # 步驟 5: 透過 IAP 隧道執行遠端指令
+      # 步驟 5: 透過 IAP 隧道走google內網，找到VM 22 port，然後執行一系列遠端指令：登入VM、創立.env、git pull、docker compose up
       # 加上 --ssh-key-file 強制指定使用放在~/.ssh/id_rsa的那把鑰匙
       - name: Deploy via IAP Tunnel
         run: |
