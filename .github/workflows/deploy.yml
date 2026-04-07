@@ -2,7 +2,11 @@ name: Deploy-to-GCP-VM-practice-cicd-tjr104  # 機器人的名字
 
 on:
   push:
-    branches: [ "develop/CI" ] # 當代碼推送到develop/CI時觸發
+    branches: 
+      - develop/CI # 當代碼推送到develop/CI時觸發
+    paths-ignore:      # 忽略以下路徑的變動
+      - '**.md'        # 所有 Markdown 文件
+      - 'docs/**'      # docs 資料夾
 
 jobs:
   deploy: # 將這一個job名稱命名為deploy

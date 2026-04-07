@@ -72,13 +72,14 @@
         gcloud compute ssh Deploy-to-GCP-VM-practice-cicd-tjr104@practice-cicd-tjr104 --zone="asia-east1-c" --tunnel-through-iap --project="causal-inquiry-484423-e7" --ssh-key-file="~/.ssh/github_actions_tw_traffic"
     ```
 15. Manually create new folder of which the path is same as that described in deploy.yml
+    ** 核心觀念: 如果這些資料夾是持久化的（不會隨部署刪除），只需要手動進去改一次就好，不要寫到CICD中。
     ```
         #  建立專案資料夾
-        mkdir ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents
+        mkdir -p ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents
         # taiwan_traffic_accidents <--- Usually this is the same as the repo name on github.
 
         # 設定airflow容器工作時的必需資料夾之權限
-        mkdir ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents/logs
+        mkdir -p ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents/logs
 
         # 1. 修正 logs 權限，讓 Airflow 能寫入日誌
         sudo chown -R 50000:0 ./logs
