@@ -58,6 +58,7 @@ jobs:
               echo 'REDIS_HOST=${{ secrets.REDIS_HOST }}' >> .env &&
               echo 'REDIS_PORT=${{ secrets.REDIS_PORT }}' >> .env &&
               echo 'REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}' >> .env &&
+              echo 'GOOGLE_MAP_API_KEY=${{ secrets.GOOGLE_MAP_API_KEY }}' >> .env &&
               echo 'AIRFLOW_SECRET_KEY=${{ secrets.AIRFLOW_SECRET_KEY }}' >> .env &&
               echo 'AIRFLOW_ADMIN_USER=${{ secrets.AIRFLOW_ADMIN_USER }}' >> .env &&
               echo 'AIRFLOW_ADMIN_PASSWORD=${{ secrets.AIRFLOW_ADMIN_PASSWORD }}' >> .env &&
