@@ -60,4 +60,5 @@ jobs:
             --set-env-vars="REDIS_HOST=10.140.0.14" \
             --set-env-vars="REDIS_PORT=${{ secrets.REDIS_PORT }}" \
             --set-env-vars="REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}" \
-            --set-env-vars="GOOGLE_MAP_API_KEY=${{ secrets.GOOGLE_MAP_API_KEY }}"
+            --set-env-vars="GOOGLE_MAP_API_KEY=${{ secrets.GOOGLE_MAP_API_KEY }}" \
+            --set-env-vars="PYTHONPATH=/app"
