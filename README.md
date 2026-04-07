@@ -87,16 +87,40 @@ The project is organized into four sequential branches. Each branch represents a
             ├── docker-compose.yml          # (From Branch 2)
             └── requirements.txt            # (From Branch 2)
     ```
-# Branch 4, name: "main/production"
-1. core func: Production-ready branch for stable service deployment on GCP.
+# Branch 4, name: "UAT"
+1. core func: A production-close branch for test the deployment on GCP VM and cloud run.
 2. sources: Merged from develop/CI after all CI/CD checks pass.
 3. directories:
     ```
         my-project/
-            ├── (those from branch 3)
+            ├── .github/                    # (From Branch 3)
+            │   └── workflows/
+            │       └── deploy.yml          
+            ├── dags/                       # (From Branch 3)
+            ├── src/                        # (From Branch 3)
+            |   ├── pages/                  
+            |   ├── tasks/                                  
+            |   ├── util/                   
+            │   └── app.py                  
+            │
+            ├── .env                        # (From Branch 3，在github remote branch上
+            |                                  會以.env.example示範)
+            ├── .gitignore                  # (From Branch 3)
+            ├── docker/                     # (From Branch 3)
+            │   ├── Dockerfile.airflow
+            │   └── Dockerfile.streamlit
+            ├── docker-compose.yml          # (From Branch 3)
+            └── requirements.txt            # (From Branch 3)
+    ```
+# Branch 5, name: "main/production"
+1. core func: Production-ready branch for stable service.
+2. sources: All the components from branch 4
+3. directories:
+    ```
+        my-project/
+            ├── (those from branch 4)
             └── README.md  # 也就是本文。且未來會再附上Cloud Run網址與VM操作說明
     ```
-
 
 # How to run the srcipts?
 1. Always run under Project Root Directory (專案根目錄), then
