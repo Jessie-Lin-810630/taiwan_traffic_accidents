@@ -73,9 +73,22 @@
     ```
 15. Manually create new folder of which the path is same as that described in deploy.yml
     ```
-        # e.g.:
+        #  建立專案資料夾
         mkdir ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents
         # taiwan_traffic_accidents <--- Usually this is the same as the repo name on github.
+
+        # 設定airflow容器工作時的必需資料夾之權限
+        mkdir ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents/logs
+
+        # 1. 修正 logs 權限，讓 Airflow 能寫入日誌
+        sudo chown -R 50000:0 ./logs
+
+        # 2. 確保部署人(e.g. GCP_SSH_USER)仍在 docker 群組中，確保CICD過程還是可以持續做docker pull權限
+        sudo usermod -aG docker <GCP_SSH_USER>
+
+        # 3. 透過5，給予 dags 和 src 足夠的讀取與執行權限，避免 Airflow 容器讀不到程式碼
+        sudo chmod -R 775 ./dags ./src
+        # note: 如果DAGs執行時有需要把爬下來的資料存在./src內，那5權限就不夠。
     ```
 16. [Optional] Install git in VM.
     ```
