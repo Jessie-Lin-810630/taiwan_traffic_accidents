@@ -1,3 +1,52 @@
+# x-開頭，代表擴充欄位，x-這段內容是僅供參考，不要直接啟動服務，且這段內容給一個&airflow-common錨點。
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: ./docker/Dockerfile.airflow
+  env_file:
+    - .env
+  environment:
+    # ====Airflow 3.x 核心變數 ====
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_SECRET_KEY}
+
+    # ==== Airflow 3.x 新架構：API 與 SDK 設定 ====
+    # 在 3.x 中，許多內部通訊改走 API 埠 (8080)
+    AIRFLOW__API__SERVER_HOST: 0.0.0.0
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth"
+    AIRFLOW__TASK_SDK__ENABLED: "True"
+    AIRFLOW__CORE__TASK_RUNNER: "StandardTaskRunner"
+
+    # 連向 webserver (3.x 中 webserver 兼任 API Server)
+    AIRFLOW__CONFIG__FASTAPI_API_URL: "http://airflow-webserver:8080"
+    AIRFLOW__API__EXECUTION_API_SERVER_URL: "http://airflow-webserver:8080/api/v1"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-webserver:8080/execution"
+
+    # 核心連線設定
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql-db:3306/${MYSQL_AIRFLOW_DATABASE}
+
+    # 專案路徑與 API
+    PYTHONPATH: "/opt/airflow/"
+    GOOGLE_MAP_API_KEY: ${GOOGLE_MAP_API_KEY}
+    REDIS_HOST: ${REDIS_HOST}
+    REDIS_PORT: ${REDIS_PORT}
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    MYSQL_HOST: ${MYSQL_HOST}
+    MYSQL_PORT: 3306
+    MYSQL_USER: ${MYSQL_USER}
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    MYSQL_AIRFLOW_DATABASE: ${MYSQL_AIRFLOW_DATABASE}
+    MYSQL_DATABASE: ${MYSQL_DATABASE}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./src:/opt/airflow/src
+  networks:
+    - backend_net
+  restart: always
+
 services:
   # 1. 關聯式資料庫
   mysql-db:
@@ -12,7 +61,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3307:3306"
+      - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -42,69 +91,43 @@ services:
       timeout: 3s
       retries: 10
 
-  # 3. ETL 排程指揮、使用standalone一次啟動Webserver, Scheduler 和 Triggerer。在生產環境再拆開。
-  airflow:
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile.airflow
-    container_name: airflow_app
-    environment:
-      MYSQL_HOST: ${MYSQL_HOST}
-      MYSQL_PORT: 3306
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@${MYSQL_HOST}:3306/${MYSQL_DATABASE}
-      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      GOOGLE_MAP_API_KEY: ${GOOGLE_MAP_API_KEY}
-      PYTHONPATH: "/opt/airflow/"
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./src:/opt/airflow/src
-      - ./logs:/opt/airflow/logs
-    command: standalone
-    ports:
-      - "8081:8080"
-    depends_on:
-      mysql-db:
-        condition: service_healthy
-      redis-cache:
-        condition: service_healthy
-    networks:
-      - backend_net
+  # ==== Airflow 初始化層 ====
 
-  # 4. 前端展示介面；開發階段讓STREAMLIT與AIRFLOW共用同一組使用者帳密(${MYSQL_USER}、${MYSQL_PASSWORD})
-  streamlit-app:
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile.streamlit
-    container_name: streamlit_ui
-    environment:
-      MYSQL_HOST: ${MYSQL_HOST}
-      MYSQL_PORT: 3306
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      PYTHONPATH: /app
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./src:/app/src
-      - ./.streamlit:/app/.streamlit
+  airflow-init:
+    <<: *airflow-common # 合併運算子：把整塊模板解壓縮到各個 Service 中。
+    container_name: airflow_init
+    restart: "no" # 執行完就結束
+    command: >
+      bash -c "airflow db migrate &&  airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
     depends_on:
-      mysql-db:
-        condition: service_healthy
-      redis-cache:
-        condition: service_healthy
-    networks:
-      - backend_net
+      mysql-db: { condition: service_healthy }
+      redis-cache: { condition: service_healthy }
+
+  # ==== Airflow 運行層 ====
+  # 3a. Airflow Webserver (儀表板)
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    command: webserver
+    ports: [ "8081:8080" ]
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
+
+  # 3b. Airflow Scheduler (調度心臟)
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    command: scheduler
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
+
+  # 3c. Airflow Triggerer (處理非同步任務)
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow_triggerer
+    command: triggerer
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
 
 networks:
   backend_net:
@@ -112,4 +135,3 @@ networks:
 
 volumes:
   mysql_data:
-  redis_data:
