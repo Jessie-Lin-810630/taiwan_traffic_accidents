@@ -24,7 +24,9 @@ The project is organized into four sequential branches. Each branch represents a
             │   └── test_transform.py            # Unittest 測試檔
             ├── sandbox/
             │   └── miscellaneous.py             # 放置一些想做版控、但現在暫時用不到的函式
-            ├── .env                             # 本地環境變數(e.g, DB_HOST=localhost)
+            ├── .env                             # 本地環境變數(e.g, DB_HOST=localhost)，
+            |                                      在github remote branch上會以.env.example示範
+            |                                 
             ├── pyproject.toml                   # Poetry 設定
             ├── poetry.lock                      # 精確版本鎖定
             └── .gitignore                       # 存放不需要trace的檔案、檔案類型
@@ -47,10 +49,13 @@ The project is organized into four sequential branches. Each branch represents a
             |   ├── util/                   # (From Branch 1)
             │   └── app.py                  # (From Branch 1) 
             ├── sandbox/                    # (From Branch 1) 
-            ├── .env                        # (Revised from Branch 1)容器化環境變數(e.g, DB_HOST=容器名稱)
+            ├── .env                        # (Revised from Branch 1)容器化環境變數
+            |                                 (e.g, DB_HOST=容器名稱)，在github remote branch上
+            |                                 會以.env.example示範
+            |
             ├── pyproject.toml              # (From Branch 1)
             ├── poetry.lock                 # (From Branch 1)
-            ├── .gitignore                  # (From Branch 1)存放不需要trace的檔案、檔案類型
+            ├── .gitignore                  # (From Branch 1)
             ├── docker/                     # + 容器定義
             │   ├── Dockerfile.airflow
             │   └── Dockerfile.streamlit
@@ -58,20 +63,29 @@ The project is organized into four sequential branches. Each branch represents a
             └── requirements.txt            # + 執行poetry export產出
     ```
 # Branch 3, name: "develop/CI"
-1. core func.: Implement GitHub Actions to automate the build and push processes. This ensures that Docker images are automatically validated and stored in a container registry upon code updates.
+1. core func.: Implement GitHub Actions to automate the building process of the docker containers in remote VM on GCP.
 2. sources: some components from Branch 2.
 3. planned directories:
     ```
         my-project/
-            ├── .github/           # + GitHub Actions自動化腳本
+            ├── .github/                    # + GitHub Actions自動化腳本
             │   └── workflows/
-            │       └── ci-cd.yml  # 測試build image並push到Artifact Registry
-            ├── dags/
-            ├── docker/
-            ├── src/
-            ├── docker-compose.yml
-            ├── requirements.txt
-            └── .env.example       # + 提供給雲端環境的變數範本
+            │       └── deploy.yml          # + 測試在GCP VM上building container
+            ├── dags/                       # (From Branch 2)
+            ├── src/                        # (From Branch 2)
+            |   ├── pages/                  
+            |   ├── tasks/                                  
+            |   ├── util/                   
+            │   └── app.py                  
+            │
+            ├── .env                        # (From Branch 2，在github remote branch上
+            |                                  會以.env.example示範)
+            ├── .gitignore                  # (From Branch 2)
+            ├── docker/                     # (From Branch 2)
+            │   ├── Dockerfile.airflow
+            │   └── Dockerfile.streamlit
+            ├── docker-compose.yml          # (From Branch 2)
+            └── requirements.txt            # (From Branch 2)
     ```
 # Branch 4, name: "main/production"
 1. core func: Production-ready branch for stable service deployment on GCP.
