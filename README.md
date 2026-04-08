@@ -1,12 +1,15 @@
 # Traffic Accident ETL & Visualization Project
 
 # Purpose
-This repository demonstrates an end-to-end ETL (Extract, Transform, Load) pipeline for Taiwan traffic accident data, featuring a frontend dashboard built with Streamlit. The ultimate goal is to deploy the service as a microservice on Google Cloud Platform (GCP) using Cloud Run.
+This repository partially `refers to my previous contribution` (repository link: https://github.com/CarlHung65/tjr104_t01) where I collaborated with classmates. The difference between these two repositories is, the purpose of initiation of this repository is to `practice` `CI/CD concepts` and `GCP cloud run` which had not learned and implemented in the past.
 
-# Developement workflow flow in each branch
-The project is organized into four sequential branches. Each branch represents a specific milestone in the development lifecycle, including its core functions, environment, and deliverables.
+# Business goal
+This repository demonstrates an end-to-end ETL (Extract, Transform, Load) pipeline for Taiwan traffic accident data, featuring a frontend dashboard built with Streamlit. The ultimate goal is to deploy a web microservice on Google Cloud Platform (GCP) using Cloud Run (https://streamlit-service-219985522999.asia-east1.run.app). The web service provided by GCP cloud run will communicate with backend GCP VM.
 
-# Branch 1, name: "feature/etl-app"
+# Workflows in each branch
+Based on the CI/CD concepts, the project is organized into five sequential branches. Each branch represents a specific milestone in the development lifecycle, including its core functions, environment, and deliverables. Detailed are listed as follows.
+
+## Branch 1, name: "feature/etl-app"
 1. core func.: Establish the core ETL logic and ensure data insights are correctly visualized via Streamlit. This branch uses Poetry for dependency management and virtual environment control. All scripts must pass unit tests before being merged into subsequent branches.
 2. environment: python + MySQL on premises
 3. planned directories:
@@ -36,7 +39,7 @@ The project is organized into four sequential branches. Each branch represents a
             packages = [{include = "src"}]'
     ```
 
-# Branch 2, name: "feature/docker-integration"
+## Branch 2, name: "feature/docker-integration"
 1. core func.: Containerize MySQL, Streamlit, and Apache Airflow. Airflow is utilized to schedule and automate ETL processes. This stage focuses on ensuring seamless communication and networking between containers.
 2. sources: merged from Branch 1 and pyproject.toml. ``Any modifications to database connections or service networking are handled in this branch.``
 3. planned directories:
@@ -62,7 +65,7 @@ The project is organized into four sequential branches. Each branch represents a
             ├── docker-compose.yml          # + 一鍵啟動所有容器
             └── requirements.txt            # + 執行poetry export產出
     ```
-# Branch 3, name: "develop/CI"
+## Branch 3, name: "develop/CI"
 1. core func.: Implement GitHub Actions to automate the building process of the docker containers in remote VM on GCP.
 2. sources: some components from Branch 2.
 3. planned directories:
@@ -87,43 +90,93 @@ The project is organized into four sequential branches. Each branch represents a
             ├── docker-compose.yml          # (From Branch 2)
             └── requirements.txt            # (From Branch 2)
     ```
-# Branch 4, name: "UAT"
-1. core func: A production-close branch for test the deployment on GCP VM and cloud run.
+## Branch 4, name: "UAT"
+1. core func: A branch to create production-similar environment, aiming at check successfully deploying the AirFlow, MySQL and Redis on a GCP VM instance, and deploing Streamlit container on cloud run.
 2. sources: Merged from develop/CI after all CI/CD checks pass.
 3. directories:
     ```
         my-project/
-            ├── .github/                    # (From Branch 3)
+            ├── .github/                    
             │   └── workflows/
-            │       └── deploy.yml          
-            ├── dags/                       # (From Branch 3)
-            ├── src/                        # (From Branch 3)
-            |   ├── pages/                  
+            │       ├── deploy-backend-vm.yml   # + Revised from Branch 3
+            |       └── deploy-cloud-run.yml    # + 測試 VPC connector access
+            |                                     與cloud run service可運行。
+            |                  
+            ├── dags/                           # (From Branch 3)
+            ├── src/                            # (From Branch 3)
+            |   ├── pages/                      
             |   ├── tasks/                                  
             |   ├── util/                   
             │   └── app.py                  
             │
-            ├── .env                        # (From Branch 3，在github remote branch上
-            |                                  會以.env.example示範)
+            ├── .env.example                # + Revised from Branch 3, environment variables in this 
+            |                                  example are truely managed by Github secret or 
+            |                                  GCP secret manager rather than .env file
+            |
             ├── .gitignore                  # (From Branch 3)
             ├── docker/                     # (From Branch 3)
             │   ├── Dockerfile.airflow
             │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # (From Branch 3)
+            ├── docker-compose.yml          # + Revised from Branch 3; Separate AirFlow standalone mode to 
+            |                                 three containers, Scheduler、Trigger、api-server(webserver)
+            |
             └── requirements.txt            # (From Branch 3)
     ```
-# Branch 5, name: "main/production"
+## Branch 5, name: "main/production"
 1. core func: Production-ready branch for stable service.
-2. sources: All the components from branch 4
+2. sources: All the components from branch 4.
 3. directories:
     ```
         my-project/
-            ├── (those from branch 4)
-            └── README.md  # 也就是本文。且未來會再附上Cloud Run網址與VM操作說明
+            ├── README.md                       # Introduce the structure and user guide of this repository.
+            ├── .github/                    
+            │   └── workflows/
+            │       ├── deploy-backend-vm.yml   # A CD workflow to deploying the backend computing services
+            |       |                             on a GCP VM. 
+            |       └── deploy-cloud-run.yml    # A CD workflow to deploying the frontend demonstation to 
+            |                                     a GCP cloud run.
+            |                  
+            ├── dags/                           # AirFlow DAGs scheduling ETL pipeline in backend VM.
+            ├── src/                            # All the required scripts & functions before orchestrated 
+            |   |                                 to an organized ETL data pipeline by AirFlow
+            |   |
+            |   ├── pages/                      # Frontend web pages via python-streamlit
+            |   ├── tasks/                      # Tasks constributing DAGs
+            |   ├── util/                       # Miscellaneous python functions without intact 
+            |   |                                 business logics but repeatedly called by tasks/
+            |   |
+            │   └── app.py                      # Fronted home page via python-streamlit.
+            |
+            ├── .streamlit/                     # Configuration changes about streamlit.
+            |
+            ├── .env.example                # Environment variables required to CD workflow and ETL 
+            |                                 datapipeline. In this example, they are truely managed by 
+            |                                 Github secret or GCP secret manager rather than an .env file.
+            |
+            ├── .gitignore                  # Untracked file name/type during development.
+            |
+            ├── docker/                     # Recipes defining customized images of AirFlow & Streamlit
+            │   ├── Dockerfile.airflow
+            │   └── Dockerfile.streamlit
+            ├── docker-compose.yml          # Build and start MySQL, Redis and AirFlow containers 
+            |                                 (Scheduler + trigger + api-server(webserver)) 
+            |                                 in backend GCP VM.
+            |
+            ├── requirements.txt            # Defining package dependency when initiaing the containers.
+            |                                 This contents of this doc will be copied when initiating 
+            |                                 containers by folloing the docker/Dockerfile.
+            └── learning_notes/             # My personnel learning notes from branch 1-4.
     ```
 
-# How to run the srcipts?
-1. Always run under Project Root Directory (專案根目錄), then
+# How to reproduce the development environment?
+1. Pull the branch 1 `feature/etl-app`. Suggests to use python >=3.12 and poetry >=2.x at your local end.
+3. Initiate the virtual environment by using poetry.
+    ```
+        cd <your專案根目錄>
+        poetry env use [path_to_python>=3.12]
+        poetry install
+    ```
+2. Always run under Project Root Directory (專案根目錄), then
     ```
         # Execute pure python scripts for ETL:
             poetry run python -m src.tasks.e_crawling_...
@@ -140,5 +193,5 @@ The project is organized into four sequential branches. Each branch represents a
 
         # Execute the streamlit:
             poetry run streamlit run src/app.py
-
     ```
+3. If you want to know how the branch1 should proceed to branch2 and even sequentially to further branches. Welcome to read [my notes 1](./learning_notes/20260403_branch-etl-app_to_docker-integration.md), [notes 2](./learning_notes/20260406_branch_docker_to_developci.md) and [note 3](./learning_notes/20260407_branch_developci_to_uat.md).

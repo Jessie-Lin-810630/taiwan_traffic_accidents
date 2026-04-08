@@ -43,3 +43,5 @@
     - Step 2: Create new SA authorized "artifact registry writer", "artifact registry reader", and "cloud run admin" roles, or add these three roles to the existing SA since branch 3.
 
 5. Push the branch UAT to Github. Then Github Actions will autmatically trigger the jobs in deploy-cloud-run.yml.
+
+6. Once the deployment are done. Trigger each DAG sequentially through AirFlow UI to run the ETL processes until loading to MySQL and Redis databases. Then go to GCP console -> Cloud Run -> Services, find the `streamlit-service`. Copy the URL path and visit in browser. If need, you can share with your interviewers or users.
