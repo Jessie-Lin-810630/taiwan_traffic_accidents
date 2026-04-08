@@ -3,7 +3,7 @@ name: Deploy-to-GCP-VM-practice-cicd-tjr104  # 機器人的名字
 on:
   push:
     branches: 
-      - UAT # 當代碼推送到UAT時觸發
+      - main # 當代碼推送到main時觸發
     paths-ignore:      # 忽略以下路徑的變動
       - '**.md'        # 所有 Markdown 文件
       - 'docs/**'      # docs 資料夾
@@ -64,7 +64,7 @@ jobs:
               echo 'AIRFLOW_ADMIN_PASSWORD=${{ secrets.AIRFLOW_ADMIN_PASSWORD }}' >> .env &&
               echo 'AIRFLOW_ADMIN_EMAIL=${{ secrets.AIRFLOW_ADMIN_EMAIL }}' >> .env &&
               
-              git pull origin UAT &&
+              git pull origin main &&
               
               docker compose up -d --build
             "
