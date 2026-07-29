@@ -19,7 +19,8 @@ dependencies = [
     "timezonefinder (>=8.2.1,<9.0.0)",
     "folium (>=0.20.0,<0.21.0)",
     "redis (>=7.4.0,<8.0.0)",
-    "plotly (>=6.6.0,<7.0.0)"
+    "plotly (>=6.6.0,<7.0.0)",
+    "pre-commit (>=4.6.1,<5.0.0)"
 ]
 
 
@@ -29,3 +30,16 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 packages = [{include = "src"}]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+ignore = [
+    "E501",  # ruff-format 負責程式碼行長，剩下的都是 formatter 無法拆的 docstring／字串
+    "D415",  # 本專案 docstring 為中文，全形句號「。」不被 D415 接受
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
