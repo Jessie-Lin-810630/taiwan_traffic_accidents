@@ -19,7 +19,7 @@ redis_password = os.getenv("REDIS_PASSWORD")
 
 
 # 全域單例連線池（Singleton）：避免每次呼叫都重複建立連線池導致連線數爆炸
-REDIS_POOL = None
+_REDIS_POOL = None
 
 
 def _get_redis_pool() -> redis.ConnectionPool:
@@ -30,9 +30,9 @@ def _get_redis_pool() -> redis.ConnectionPool:
     Returns:
         redis.ConnectionPool: Connection Pool to Redis Server
     """
-    global REDIS_POOL
-    if REDIS_POOL is None:
-        REDIS_POOL = redis.ConnectionPool(
+    global _REDIS_POOL
+    if _REDIS_POOL is None:
+        _REDIS_POOL = redis.ConnectionPool(
             host=redis_host,
             port=int(redis_port),
             password=redis_password,
@@ -40,7 +40,7 @@ def _get_redis_pool() -> redis.ConnectionPool:
             socket_timeout=5,  # 讀寫超時設定，pickled dataframe 資料設定 3 - 5 秒
             socket_connect_timeout=3,  # 連線超時設定，內網 VPC、不跨機房可以試看看 0.1 - 0.5 秒
         )
-    return REDIS_POOL
+    return _REDIS_POOL
 
 
 def create_redis_client() -> redis.Redis:
