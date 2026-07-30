@@ -6,7 +6,7 @@ import pandas as pd
 import pymysql
 import pytest
 
-from src.util.mysql_utils import upsert_to_table
+from src.util.mysql_utils import close_quietly, upsert_to_table
 
 DF = pd.DataFrame({"day_id": [1, 2], "accident_weekday": ["星期一", "星期二"]})
 
@@ -95,3 +95,18 @@ def test_update_columns_為空時拒絕執行():
     """空的 update_columns 會組出語法錯誤的 SQL，應提前擋下。"""
     with pytest.raises(ValueError, match="update_columns"):
         upsert_to_table(DF, table="dim_accident_day", update_columns=[])
+
+
+def test_close_quietly_吞掉關閉時的例外():
+    """依 ADR-0005，close() 失敗不得取代正在傳播的例外。"""
+    resource = MagicMock()
+    resource.close.side_effect = pymysql.MySQLError("already closed")
+
+    close_quietly(resource, "cursor")  # 不得拋出
+
+    resource.close.assert_called_once()
+
+
+def test_close_quietly_容許_none():
+    """資源尚未建立時（連線失敗路徑）呼叫，不得拋 AttributeError。"""
+    close_quietly(None, "connection")

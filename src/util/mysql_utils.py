@@ -22,6 +22,24 @@ username = os.getenv("MYSQL_USER")
 password = os.getenv("MYSQL_PASSWORD")
 
 
+def close_quietly(resource, resource_name: str) -> None:
+    """關閉資源，並確保關閉失敗不會取代正在傳播的例外（ADR-0005）。
+
+    供 `finally` 區塊呼叫：`close()` 自身可能拋例外（pymysql 在連線已斷時會），
+    裸呼叫會讓它取代 `except` 剛拋出的原始錯誤。
+
+    Parameters:
+        resource: 任何具備 `close()` 的資源；`None` 時直接略過。
+        resource_name (str): 記錄於 warning 訊息中的資源名稱。
+    """
+    if resource is None:
+        return
+    try:
+        resource.close()
+    except Exception as close_err:
+        logger.warning(f"Failed to close {resource_name}: {close_err}")
+
+
 # 以資料庫名為鍵的模組層 Engine 快取（ADR-0004）：
 # 每個 Engine 攜帶一個連線池，若每次呼叫都新建，池永遠不會服務第二個請求，
 # pool_size / pool_recycle / pool_pre_ping 三個設定形同虛設。
@@ -355,15 +373,7 @@ def upsert_to_table(
         logger.info(f"==== Successfully inserted into table `{table}` ====")
 
     finally:
-        if cursor:
-            try:
-                cursor.close()
-            except Exception as close_err:
-                logger.warning(f"Failed to close cursor: {close_err}")
-        if conn:
-            try:
-                conn.close()
-            except Exception as close_err:
-                logger.warning(f"Failed to close connection: {close_err}")
+        close_quietly(cursor, "cursor")
+        close_quietly(conn, "connection")
 
     return None
