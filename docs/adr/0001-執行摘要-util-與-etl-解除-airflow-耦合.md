@@ -94,15 +94,15 @@ def get_logger(name: str) -> logging.Logger:
 | 修正 D205 摘要行空行 | 15 處 |
 | 裸 `except:` → `except Exception:`（E722） | 1 處 |
 
-### 收尾修補（尚未 commit）
+### 收尾修補（commit `f734df2`、`64c1a15`）
 
-| 檔案 | 改動 |
-| --- | --- |
-| `src/util/mysql_utils.py:141` | 遺漏的 `print(schema[...])` → `logger.info(...)` |
-| `dags/d01`、`dags/d06` | 移除從未使用的 `Variable` 與 `AirflowException` import（與候選 3 的 `Variable` 同型） |
-| `src/task/create_night_markets_tables.py`、`create_traffic_accident_tables.py`、`src/util/mysql_utils.py` `create_tables()` | `CREATE TABLE` 由 `engine.connect()` 改為 `engine.begin()` |
-| `dags/d01`、`d05`、`d06` | 補模組／函式 docstring、清除未使用的區域變數，以通過 pre-commit |
-| `dags/d04` | 套用 ADR-0001（見下） |
+| 檔案 | 改動 | commit |
+| --- | --- | --- |
+| `dags/d01`、`d05` | 修復 DAG 匯入回歸（見第四章第 2 點）；一併補模組／函式 docstring、清除未使用的區域變數以通過 pre-commit | `f734df2` |
+| `src/util/mysql_utils.py:141` | 遺漏的 `print(schema[...])` → `logger.info(...)` | `64c1a15` |
+| `dags/d01`、`dags/d06` | 移除從未使用的 `Variable` 與 `AirflowException` import（與候選 3 的 `Variable` 同型） | `f734df2`／`64c1a15` |
+| `src/task/create_night_markets_tables.py`、`create_traffic_accident_tables.py`、`src/util/mysql_utils.py` `create_tables()` | `CREATE TABLE` 由 `engine.connect()` 改為 `engine.begin()` | `64c1a15` |
+| `dags/d04` | 套用 ADR-0001（見下） | `64c1a15` |
 
 ### `dags/d04` —— ADR-0001 的最後一處套用
 
