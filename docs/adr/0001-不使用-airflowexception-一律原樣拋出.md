@@ -2,7 +2,7 @@
 
 - 日期：2026-07-29
 - 狀態：已採納
-- 範圍：`src/util/` 新版連線工具、`src/task/` 全部 20 個 ETL 模組
+- 範圍：`src/util/` 新版連線工具、`src/task/` 全部 20 個 ETL 模組、`dags/d04`
 
 ## 背景
 
@@ -67,10 +67,16 @@ except SQLAlchemyError as e:
   29 處裸 `raise AirflowException` 改為 `raise`；`e_crawling_nightmarket.py` 唯一帶訊息的
   原始拋出（缺少 Google Maps API 金鑰）改為 `ValueError`；約 109 處 `print()` 改為
   `logger.info()` / `logger.error(..., exc_info=True)`。
+- `dags/`：`d01`、`d06` 移除從未使用的 `Variable` 與 `AirflowException` 匯入；
+  `d04` 的 3 處 `raise AirflowException(...)` 中，2 處 `except` 內的改為 `raise`、
+  1 處「找不到 .sql 檔案」的原始拋出改為 `FileNotFoundError`，5 處 `print` 改為 logger。
+
+DAG 檔本來就在 Airflow 內執行，`from airflow...` 是它該做的事；
+但**轉換例外型別這件事在 DAG 內同樣沒有好處**，故一併套用。
 
 ## 尚未套用之處
 
-- `dags/d04_analysis_pedestrian_accidents.py` 仍有 `raise AirflowException(...)`。
-  DAG 檔本來就在 Airflow 內執行，優先度低，但同樣沒有理由轉換例外型別。
-- `src/util/create_db_engine_or_database.py`（含 `get_or_set_cache_from_redis.py`、
-  `inspect_table_schema.py`）刻意凍結，待新版連線工具接上後整批刪除。
+`src/util/create_db_engine_or_database.py`（含 `get_or_set_cache_from_redis.py`、
+`inspect_table_schema.py`）刻意凍結，待新版連線工具接上後整批刪除。
+其中 `:104`、`:124` 的 `raise AirflowException`／`raise Exception` 皆為裸類別，
+是本 ADR 所述問題最嚴重的殘留處 —— 也是目前生產環境實際執行的那一套。
