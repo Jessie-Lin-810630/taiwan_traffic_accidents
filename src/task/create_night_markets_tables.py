@@ -1,24 +1,13 @@
-"""建立夜市事實表的 DDL 任務。"""
+"""建立夜市事實表的 DDL 宣告。"""
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
-from src.util.logger_crtx import get_logger
+from src.util.mysql_utils import create_tables
 
-logger = get_logger(__name__)
-
-
-def create_night_market_tables(engine: Engine) -> None:
-    """建立夜市事實表 `fact_night_markets`（已存在則略過）。
-
-    Parameters:
-        engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
-    """
-    try:
-        # engine.begin() 會在離開 context 時自動提交，失敗則自動 rollback；
-        # engine.connect() 預設不提交，靠 MySQL 對 DDL 的隱式提交會生效，但不應該仰賴這種隱式提交。
-        with engine.begin() as conn:
-            logger.info("Creating table 'fact_night_markets'...")
-            ddl_str = """CREATE TABLE IF NOT EXISTS `fact_night_markets`(
+# 表名 -> CREATE TABLE 敘述。鍵必須與 DDL 實際建立的表同名，
+# create_tables() 的存在性檢查才會正確。
+NIGHT_MARKET_TABLES = {
+    "fact_night_markets": """CREATE TABLE IF NOT EXISTS `fact_night_markets`(
                         `nightmarket_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '夜市代碼',
                         `nightmarket_name` VARCHAR(30) COMMENT '夜市名稱',
                         `region` VARCHAR(10) COMMENT '夜市所屬地區(北、中、南部)',
@@ -43,12 +32,14 @@ def create_night_market_tables(engine: Engine) -> None:
                                                             `longitude`,
                                                             `business_days_weekday`)
                         ) CHARSET=utf8mb4 COMMENT '全臺灣夜市地理資訊與營業時間表';
-                        """
-            conn.execute(text(ddl_str))
-            logger.info("Table 'fact_night_markets' created successfully.")
-    except Exception:
-        logger.error("An error occurred while creating the table.", exc_info=True)
-        raise
-    finally:
-        engine.dispose()
-    return None
+                        """,
+}
+
+
+def create_night_market_tables(engine: Engine) -> None:
+    """建立夜市事實表 `fact_night_markets`（已存在則略過）。
+
+    Parameters:
+        engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+    """
+    create_tables(engine, NIGHT_MARKET_TABLES)

@@ -202,47 +202,27 @@ def create_database(engine: Engine, database_name: str) -> None:
         engine.dispose()
 
 
-def create_tables(engine: Engine) -> None:
-    """Create tables in a designated MySQL database if the tables not exist.
+def create_tables(engine: Engine, tables: dict[str, str]) -> None:
+    """依傳入的 DDL 建立資料表；已存在的資料表會被跳過。
+
+    以 `inspect_table_exists()` 先行檢查，因此日誌能精確區分
+    「已存在、略過」與「本次建立」—— 這是 `CREATE TABLE IF NOT EXISTS`
+    單獨使用時做不到的。
 
     Parameters:
-        engine (Engine): SQLAlchemy Engine instance connected to MySQL server (with specifying database)
+        engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+        tables (dict[str, str]): 資料表名稱對應其 `CREATE TABLE` 敘述。
+            鍵必須與 DDL 實際建立的資料表同名，存在性檢查才會正確。
+
+    Raises:
+        SQLAlchemyError: DDL 執行失敗，事務已由 `engine.begin()` 自動復原。
     """
     logger.info("==== Starting creation of tables... ====")
-
-    tables_to_create = {
-        "dim_evnet_day": """CREATE TABLE IF NOT EXISTS `dim_event_day` (
-                                            `day_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '日編號ID',
-                                            `date` DATE COMMENT '事件日期',
-                                            `weekday` VARCHAR(10) COMMENT '事件發生星期',
-                                            `is_holiday` TINYINT COMMENT '是否放假',
-                                            `national_activity` VARCHAR(20) COMMENT '是否有全國性活動，例如：總統上任、公投日、國定假日',
-                                            CONSTRAINT `uk_dim_event_date` UNIQUE (`date`)
-                                            ) charset=utf8mb4 COMMENT '事件日維度表';
-                       """,
-        "fact_accident_main": """CREATE TABLE IF NOT EXISTS `fact_accident_main` (
-                                            `accident_id` VARCHAR(16) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
-                                            `accident_type_id` BIGINT NOT NULL COMMENT '事故類別編號ID',
-                                            `day_id` INT NOT NULL COMMENT '日編號ID',
-                                            `accident_time` time COMMENT '車禍時段(HH:MM:SS)',
-                                            `death_count` INT COMMENT '死亡人數',
-                                            `injury_count` INT COMMENT '受傷人數',
-                                            `longitude` decimal(10,6) COMMENT '經度',
-                                            `latitude` decimal(10,6) COMMENT '緯度',
-                                            CONSTRAINT `fk_fact_accmain_dayid` FOREIGN KEY (`day_id`)
-                                                REFERENCES `dim_event_day`(`day_id`),
-                                            UNIQUE KEY `uk_fact_accmain_daytimelonlat` (`day_id`, `accident_time`,
-                                                                                        `longitude`,`latitude`),
-                                            INDEX `idx_fact_accmain_lon` (`longitude`),
-                                            INDEX `idx_fact_accmain_lat` (`latitude`)
-                                            ) CHARSET=utf8mb4 COMMENT='車禍案件事實表';
-                        """,
-    }
 
     try:
         # engine.begin() 會在離開 context 時自動提交，失敗則自動 rollback。
         with engine.begin() as conn:
-            for table_name, ddl in tables_to_create.items():
+            for table_name, ddl in tables.items():
                 # 檢查 table 是否存在，若已經存在則 logger 紀錄已存在且跳過重複建立。
                 if inspect_table_exists(conn, table_name):
                     logger.info(f"Table '{table_name}' already exists, skipping.")
@@ -264,36 +244,45 @@ def create_tables(engine: Engine) -> None:
         engine.dispose()
 
 
-def upsert_to_table(df: pd.DataFrame, database: str | None = None) -> None:
-    """Write DataFrame records into a MySQL table using UPSERT (ON DUPLICATE KEY UPDATE).
+def upsert_to_table(
+    df: pd.DataFrame,
+    table: str,
+    update_columns: list[str],
+    database: str | None = None,
+) -> None:
+    """以 UPSERT（INSERT ... ON DUPLICATE KEY UPDATE）將 DataFrame 寫入 MySQL 資料表。
 
-    Provides a transaction rollback mechanism and re-raises the original
-    database error so that the traceback is preserved for the caller
-    (Airflow task log or local stderr alike).
+    提供事務復原機制，並原樣拋出原始的資料庫錯誤，
+    讓 traceback 完整保留給呼叫端（Airflow task log 或地端 stderr）。
 
     Parameters:
-        df (pandas.DataFrame): The DataFrame containing the records to be inserted/updated.
-        database (str): name of database where the table locates.
+        df (pandas.DataFrame): 待寫入的資料；欄位名須與目標資料表一致。
+        table (str): 目標資料表名稱。
+        update_columns (list[str]): 主鍵衝突時要更新的欄位名，
+            會被組成 `col=VALUES(col)` 片段。不可為空。
+        database (str | None): 資料表所在的資料庫名稱。
+
+    Raises:
+        ValueError: `update_columns` 為空時，SQL 無法組成。
+        pymysql.MySQLError: 寫入失敗，事務已復原後原樣拋出。
     """
+    if not update_columns:
+        raise ValueError(f"upsert 至 `{table}` 需要至少一個 update_columns 欄位")
+
     # 1. 準備INSERT資料表時需要的SQL語句，採用UPSERT
     columns = ", ".join(df.columns)
     placeholders = ", ".join(["%s"] * len(df.columns))
+    update_part = ", ".join(f"{col}=VALUES({col})" for col in update_columns)
 
-    # update_part = "<更新的欄位名1>=VALUES(<更新的欄位名1>), <更新的欄位名2>=VALUES(<更新的欄位名2>)"
-    update_part = "accident_weekday=VALUES(accident_weekday)"
-
-    dml_str = f"""INSERT INTO dim_accident_day ({columns})
+    dml_str = f"""INSERT INTO {table} ({columns})
                   VALUES ({placeholders})
                   ON DUPLICATE KEY UPDATE {update_part};
                 """
-    # MySQL 8.0.20 以後可寫成
-    # update_part = "accident_weekday=n.accident_weekday"
-    # dml_str = f"""INSERT INTO dim_accident_day ({columns})
-    #               VALUES ({placeholders}) AS n
-    #               ON DUPLICATE KEY UPDATE {update_part};
-    #             """
+    # MySQL 8.0.20 以後 VALUES() 已標記為 deprecated，可改寫成：
+    #     INSERT INTO {table} ({columns}) VALUES ({placeholders}) AS n
+    #     ON DUPLICATE KEY UPDATE {col}=n.{col}
 
-    logger.info("==== Starting insertion into table `dim_accident_day` ====")
+    logger.info(f"==== Starting insertion into table `{table}` ====")
 
     conn = None
     cursor = None
@@ -311,20 +300,20 @@ def upsert_to_table(df: pd.DataFrame, database: str | None = None) -> None:
 
     except pymysql.MySQLError:
         # 4. 資料庫例外處理：復原事務，並重新拋出原始錯誤
-        logger.error("Database error occurred during insertion.", exc_info=True)
+        logger.error(f"Database error while inserting into `{table}`.", exc_info=True)
         if conn:
             conn.rollback()
             logger.info("Transaction rollbacked successfully.")
         raise
 
     except Exception:
-        logger.error("Unexpected error occurred during insertion.", exc_info=True)
+        logger.error(f"Unexpected error while inserting into `{table}`.", exc_info=True)
         if conn:
             conn.rollback()
         raise
 
     else:
-        logger.info("==== Successfully inserted into table `dim_accident_day` ====")
+        logger.info(f"==== Successfully inserted into table `{table}` ====")
 
     finally:
         if cursor:
