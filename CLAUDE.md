@@ -62,26 +62,30 @@ DAG 只負責串接：`dags/dNN_*.py` 把上述函式包進 `@task`，用 `pathl
 
 重運算走「DAG 預先算好 → pickle 進 Redis（TTL 10 天）→ 前端 `get_cache` 讀」的模式，前端不做重運算。`src/task/mart_table_sql/*.sql` 是 mart 層純 SQL，由 `d04_analysis_pedestrian_accidents` 以 multistatement 連線執行。
 
-### 雙環境 logger
+### logger 與例外處理
 
-`src/util/logger_crtx.py` 的 `create_logging_logger()` 會自動偵測是否在 Airflow 環境，回傳 `(logger, is_airflow_env, AirflowException)`。地端時 `AirflowException` 是假的 stub 類別，因此 util 模組可在無 Airflow 的環境（如 Cloud Run 的 Streamlit 容器）被匯入。新增 util 模組時沿用這個 pattern：
+`src/util/logger_crtx.py` 只有一個函式 `get_logger(name)`，純標準函式庫、不偵測環境。新增模組時：
 
 ```python
-logger, is_airflow_env = create_logging_logger()
-if is_airflow_env:
-    from airflow.exceptions import AirflowException
+from src.util.logger_crtx import get_logger
+
+logger = get_logger(__name__)
 ```
 
-注意 `src/task/` 底下多數 `t_*.py` / `l_*.py` 是直接 `from airflow.exceptions import AirflowException`，這些只在 Airflow 容器內執行，不會被前端匯入。
+**例外一律 `logger.error(..., exc_info=True)` 後原樣 `raise`，不要轉換成 `AirflowException`** —— 理由見 `docs/adr/0001-不使用-airflowexception-一律原樣拋出.md`。簡述：Airflow 3 中 `AirflowException` 與任何其他例外的失敗／重試語意完全相同，轉換只會遮蔽原始錯誤型別。真的需要「失敗但不重試」時才明確使用 `AirflowFailException`。
+
+此 ADR 已套用到 `src/util/` 的新版工具與 `src/task/` 全部 20 個 ETL 模組 —— **這些模組現在都能在無 Airflow 的環境（地端、pytest、Cloud Run）被匯入**，由 `test/unit_test/test_util_logger_crtx.py` 把關。`dags/` 底下仍照常 import airflow，那是它該做的事。
+
+尚未套用：`dags/d04_analysis_pedestrian_accidents.py` 內還有 `raise AirflowException(...)`，以及 `src/util/create_db_engine_or_database.py`（見下節，刻意凍結）。
 
 ### 進行中的 util 重構（重要）
 
 `src/util/` 目前有兩套並存的連線工具：
 
-- **實際被使用的**：`create_db_engine_or_database.py`、`get_or_set_cache_from_redis.py`、`crawling_utils.py` 以外的舊檔
-- **未追蹤、尚未被任何檔案 import 的新版**：`mysql_utils.py`、`redis_utils.py`、`crawling_utils.py`、`logger_crtx.py`
+- **實際被使用的舊版**：`create_db_engine_or_database.py`、`get_or_set_cache_from_redis.py`、`inspect_table_schema.py`。仍用 `print`、`"/opt/airflow" in sys.path` 偵測、`raise Exception` 裸類別。**刻意凍結不動**，待新版接上後三個檔案一次刪除。
+- **尚未被任何檔案 import 的新版**：`mysql_utils.py`、`redis_utils.py`、`crawling_utils.py`。已加上連線池單例、typed exception、socket timeout。
 
-新版加上了 loguru/logger context、連線池單例、`upsert_to_table()` 等抽象。修改連線邏輯前先用 grep 確認要動的是哪一套，別假設新版已生效。
+修改連線邏輯前先用 grep 確認要動的是哪一套，別假設新版已生效。新版接上的已知阻礙：`mysql_utils.upsert_to_table()` 與 `create_tables()` 的表名／`update_part` 仍是硬編碼的模板，`crawling_utils.download_and_extract_zip()` 的參數順序與現有呼叫端不相容。
 
 ## 環境變數
 
