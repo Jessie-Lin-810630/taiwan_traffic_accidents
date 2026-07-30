@@ -6,10 +6,8 @@ from pathlib import Path
 
 from airflow.sdk import dag, task
 
-from src.util.create_db_engine_or_database import (
-    get_pymysql_conn_to_mysql_multistatement,
-)
 from src.util.logger_crtx import get_logger
+from src.util.mysql_utils import get_pymysql_conn_to_mysql_multistatement
 
 logger = get_logger(__name__)
 

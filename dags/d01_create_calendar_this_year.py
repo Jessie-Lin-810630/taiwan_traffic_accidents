@@ -11,10 +11,7 @@ from src.task.t_dim_accident_day import (
     t_data_for_dim_accident_day,
     taiwan_national_activities,
 )
-from src.util.create_db_engine_or_database import (
-    create_database,
-    create_engine_to_mysql,
-)
+from src.util.mysql_utils import create_database, create_engine_to_mysql
 
 # Default arguments for the DAG
 default_args = {

@@ -17,7 +17,7 @@ from src.task.t_fact_night_markets import (
     read_googlemap_responsed_json,
     t_fact_night_markets,
 )
-from src.util.create_db_engine_or_database import create_engine_to_mysql
+from src.util.mysql_utils import create_engine_to_mysql
 
 # Default arguments for the DAG
 default_args = {
