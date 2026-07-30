@@ -14,7 +14,9 @@ def create_night_market_tables(engine: Engine) -> None:
         engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
     """
     try:
-        with engine.connect() as conn:
+        # engine.begin() 會在離開 context 時自動提交，失敗則自動 rollback；
+        # engine.connect() 預設不提交，靠 MySQL 對 DDL 的隱式提交會生效，但不應該仰賴這種隱式提交。
+        with engine.begin() as conn:
             logger.info("Creating table 'fact_night_markets'...")
             ddl_str = """CREATE TABLE IF NOT EXISTS `fact_night_markets`(
                         `nightmarket_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '夜市代碼',

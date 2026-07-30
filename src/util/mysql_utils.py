@@ -138,7 +138,7 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
         # 1. 型態與索引檢查
         logger.info("[1. Schema Definition]")
         schema = pd.read_sql(text(f"DESC {full_table_path}"), conn)
-        print(schema[["Field", "Type", "Key"]])
+        logger.info(f"\n{schema[['Field', 'Type', 'Key']]}")
 
         # 2. 筆數統計
         count = conn.execute(text(f"SELECT COUNT(*) FROM {full_table_path}")).scalar()
@@ -240,7 +240,8 @@ def create_tables(engine: Engine) -> None:
     }
 
     try:
-        with engine.connect() as conn:
+        # engine.begin() 會在離開 context 時自動提交，失敗則自動 rollback。
+        with engine.begin() as conn:
             for table_name, ddl in tables_to_create.items():
                 # 檢查 table 是否存在，若已經存在則 logger 紀錄已存在且跳過重複建立。
                 if inspect_table_exists(conn, table_name):
