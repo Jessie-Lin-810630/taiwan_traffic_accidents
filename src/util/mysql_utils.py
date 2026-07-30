@@ -11,11 +11,9 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.util.logger_crtx import create_logging_logger
+from src.util.logger_crtx import get_logger
 
-logger, is_airflow_env = create_logging_logger()
-if is_airflow_env:
-    from airflow.exceptions import AirflowException
+logger = get_logger(__name__)
 
 load_dotenv()
 host = os.getenv("MYSQL_HOST", "localhost")
@@ -160,12 +158,8 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
         with engine.connect() as conn:
             result = _extracted_from_inspect_table(full_table_path, conn)
             logger.info(f"{result}")
-    except Exception as e:
-        logger.error(f"Error inspecting {full_table_path}: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Error inspecting on Airflow: {full_table_path}: {e}"
-            ) from e
+    except Exception:
+        logger.error(f"Error inspecting {full_table_path}", exc_info=True)
         raise
 
 
@@ -189,21 +183,19 @@ def create_database(engine: Engine, database_name: str) -> None:
             )
             logger.info(f"Database '{database_name}' checked/created successfully.")
 
-    except SQLAlchemyError as e:
+    except SQLAlchemyError:
         # exc_info=True 會將完整的資料庫 Traceback 寫入 Airflow /logs/
-        logger.error(f"SQLAlchemy database error occurred: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Failed: Unable to create database '{database_name}'."
-            ) from e
+        logger.error(
+            f"SQLAlchemy database error occurred while creating '{database_name}'.",
+            exc_info=True,
+        )
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error occurred: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed due to unexpected error."
-            ) from e
+    except Exception:
+        logger.error(
+            f"Unexpected error occurred while creating '{database_name}'.",
+            exc_info=True,
+        )
         raise
 
     finally:
@@ -258,17 +250,13 @@ def create_tables(engine: Engine) -> None:
                 conn.execute(text(ddl))
                 logger.info(f"Table '{table_name}' created successfully.")
 
-    except SQLAlchemyError as e:
+    except SQLAlchemyError:
         # exc_info=True 會將完整的資料庫 Traceback 寫入 Airflow /logs/
         logger.error("SQLAlchemy error occurred during table creation.", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException("Airflow Task Failed: Table creation error.") from e
         raise
 
-    except Exception as e:
+    except Exception:
         logger.error("Unexpected error occurred during table creation.", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException("Airflow Task Failed: Unexpected error.") from e
         raise
 
     finally:
@@ -278,9 +266,9 @@ def create_tables(engine: Engine) -> None:
 def upsert_to_table(df: pd.DataFrame, database: str | None = None) -> None:
     """Write DataFrame records into a MySQL table using UPSERT (ON DUPLICATE KEY UPDATE).
 
-    Provides a transaction rollback mechanism and preserves
-    the original database error context regardless of different execution
-    environments (e.g., local execution or Airflow).
+    Provides a transaction rollback mechanism and re-raises the original
+    database error so that the traceback is preserved for the caller
+    (Airflow task log or local stderr alike).
 
     Parameters:
         df (pandas.DataFrame): The DataFrame containing the records to be inserted/updated.
@@ -320,26 +308,18 @@ def upsert_to_table(df: pd.DataFrame, database: str | None = None) -> None:
         )  # df.values.tolist() 轉回 list of lists
         conn.commit()
 
-    except pymysql.MySQLError as e:
+    except pymysql.MySQLError:
         # 4. 資料庫例外處理：復原事務，並重新拋出原始錯誤
-        logger.error(f"Database error occurred during insertion: {e}", exc_info=True)
+        logger.error("Database error occurred during insertion.", exc_info=True)
         if conn:
             conn.rollback()
             logger.info("Transaction rollbacked successfully.")
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: MySQL Upsert error on table `dim_accident_day`."
-            ) from e
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error occurred: {e}", exc_info=True)
+    except Exception:
+        logger.error("Unexpected error occurred during insertion.", exc_info=True)
         if conn:
             conn.rollback()
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: Unexpected error during ETL process."
-            ) from e
         raise
 
     else:

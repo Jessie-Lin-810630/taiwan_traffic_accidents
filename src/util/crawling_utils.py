@@ -8,13 +8,9 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 
-from src.util.logger_crtx import create_logging_logger
+from src.util.logger_crtx import get_logger
 
-# 三個物件統一從 logger 模組取得
-_ctx = create_logging_logger()
-logger = _ctx.logger
-is_airflow_env = _ctx.is_airflow_env
-AirflowException = _ctx.AirflowException
+logger = get_logger(__name__)
 
 # 只停用 InsecureRequestWarning，避免每次呼叫 download_csv() 都噴一次警告到 stderr 導致 log 落落長，
 # 但也不用 disable_warnings() 全關（會遮蔽其他種類的安全警告）。
@@ -47,44 +43,20 @@ def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
             logger.info(f"成功訪問 {url}，狀態碼: {response.status_code}")
             soup = BeautifulSoup(response.text, "html.parser")
 
-        except requests.exceptions.Timeout as e:
-            logger.error(
-                f"請求超時 (Timeout) -> URL: {url} | 錯誤訊息: {e}", exc_info=True
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Task Timeout while fetching download links from {url}"
-                ) from e
+        except requests.exceptions.Timeout:
+            logger.error(f"請求超時 (Timeout) -> URL: {url}", exc_info=True)
             raise
 
-        except requests.exceptions.ConnectionError as e:
-            logger.error(
-                f"連線失敗 (ConnectionError) -> URL: {url} | 錯誤訊息: {e}",
-                exc_info=True,
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Network Connection Error to {url}"
-                ) from e
+        except requests.exceptions.ConnectionError:
+            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}", exc_info=True)
             raise
 
-        except requests.exceptions.HTTPError as e:
-            logger.error(
-                f"HTTP 回應異常 (HTTPError) -> URL: {url} | 錯誤訊息: {e}",
-                exc_info=True,
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow HTTP Error status code caught while fetching {url}"
-                ) from e
+        except requests.exceptions.HTTPError:
+            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}", exc_info=True)
             raise
 
-        except Exception as e:
-            logger.error(f"未預期的錯誤 -> URL: {url} | 錯誤訊息: {e}", exc_info=True)
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Task failed due to unexpected error while fetching {url}"
-                ) from e
+        except Exception:
+            logger.error(f"未預期的錯誤 -> URL: {url}", exc_info=True)
             raise
 
         else:
@@ -132,44 +104,20 @@ def iterate_crawling_similar_urls(urls: list[str], headers: dict) -> dict:
             logger.info(f"成功訪問 {url}，狀態碼: {response.status_code}")
             soup = BeautifulSoup(response.text, "html.parser")
 
-        except requests.exceptions.Timeout as e:
-            logger.error(
-                f"請求超時 (Timeout) -> URL: {url} | 錯誤訊息: {e}", exc_info=True
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Task Timeout while fetching download links from {url}"
-                ) from e
+        except requests.exceptions.Timeout:
+            logger.error(f"請求超時 (Timeout) -> URL: {url}", exc_info=True)
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
-        except requests.exceptions.ConnectionError as e:
-            logger.error(
-                f"連線失敗 (ConnectionError) -> URL: {url} | 錯誤訊息: {e}",
-                exc_info=True,
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Network Connection Error to {url}"
-                ) from e
+        except requests.exceptions.ConnectionError:
+            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}", exc_info=True)
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
-        except requests.exceptions.HTTPError as e:
-            logger.error(
-                f"HTTP 回應異常 (HTTPError) -> URL: {url} | 錯誤訊息: {e}",
-                exc_info=True,
-            )
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow HTTP Error status code caught while fetching {url}"
-                ) from e
+        except requests.exceptions.HTTPError:
+            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}", exc_info=True)
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
-        except Exception as e:
-            logger.error(f"未預期的錯誤 -> URL: {url} | 錯誤訊息: {e}", exc_info=True)
-            if is_airflow_env:
-                raise AirflowException(
-                    f"Airflow Task failed due to unexpected error while fetching {url}"
-                ) from e
+        except Exception:
+            logger.error(f"未預期的錯誤 -> URL: {url}", exc_info=True)
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
         else:
@@ -217,8 +165,8 @@ def download_and_extract_zip(
         list[str] : Paths of extracted CSV files.
 
     Raises:
-        AirflowException: In Airflow environment, all errors are re-raised as AirflowException.
-        requests.exceptions.*: In non-Airflow environment, original exceptions are re-raised.
+        requests.exceptions.*: Original exceptions are logged then re-raised, so the
+            traceback stays intact for the caller (Airflow task log or local stderr).
     """
     zipfile_save_dir = Path(str(zipfile_save_dir))
     unzipfile_save_dir = Path(str(unzipfile_save_dir))
@@ -242,40 +190,20 @@ def download_and_extract_zip(
                 if chunk:
                     f.write(chunk)
 
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout -> URL: {download_link} | error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Timeout while downloading zip from {download_link}"
-            ) from e
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout -> URL: {download_link}", exc_info=True)
         raise
 
-    except requests.exceptions.ConnectionError as e:
-        logger.error(
-            f"Connection error -> URL: {download_link} | error: {e}", exc_info=True
-        )
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Network Connection Error while downloading zip from {download_link}"
-            ) from e
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error -> URL: {download_link}", exc_info=True)
         raise
 
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP error -> URL: {download_link} | error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow HTTP Error while downloading zip from {download_link}"
-            ) from e
+    except requests.exceptions.HTTPError:
+        logger.error(f"HTTP error -> URL: {download_link}", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(
-            f"Unexpected error during zip download or save: {e}", exc_info=True
-        )
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: Unexpected error during zip download."
-            ) from e
+    except Exception:
+        logger.error("Unexpected error during zip download or save.", exc_info=True)
         raise
 
     else:
@@ -322,14 +250,10 @@ def download_and_extract_zip(
                     # with z.open(f, mode="r") as source:
                     #     df = pd.read_csv(source)
                     #     csvfile_pathlist.append(df)
-    except Exception as e:
+    except Exception:
         logger.error(
-            f"Unexpected error during zip extraction or CSV save: {e}", exc_info=True
+            "Unexpected error during zip extraction or CSV save.", exc_info=True
         )
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: Unexpected error during zip extraction."
-            ) from e
         raise
 
     logger.info(
@@ -352,8 +276,8 @@ def download_csv(
         list[str]: Paths of successfully saved CSV files.
 
     Raises:
-        AirflowException: In Airflow environment, all errors are re-raised as AirflowException.
-        requests.exceptions.*: In non-Airflow environment, original exceptions are re-raised.
+        requests.exceptions.*: Original exceptions are logged then re-raised, so the
+            traceback stays intact for the caller (Airflow task log or local stderr).
     """
     csvfile_save_dir = Path(str(csvfile_save_dir))
     csvfile_save_dir.mkdir(parents=True, exist_ok=True)
@@ -380,38 +304,20 @@ def download_csv(
                 if chunk:
                     f.write(chunk)
 
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout -> URL: {download_link} | error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Timeout while downloading csv from {download_link}"
-            ) from e
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout -> URL: {download_link}", exc_info=True)
         raise
 
-    except requests.exceptions.ConnectionError as e:
-        logger.error(
-            f"Connection error -> URL: {download_link} | error: {e}", exc_info=True
-        )
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Network Connection Error while downloading csv from {download_link}"
-            ) from e
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error -> URL: {download_link}", exc_info=True)
         raise
 
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP error -> URL: {download_link} | error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow HTTP Error while downloading csv from {download_link}"
-            ) from e
+    except requests.exceptions.HTTPError:
+        logger.error(f"HTTP error -> URL: {download_link}", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error during CSV download: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: Unexpected error during csv download."
-            ) from e
+    except Exception:
+        logger.error("Unexpected error during CSV download.", exc_info=True)
         raise
 
     logger.info(f"==== CSV saved to: {csvfile_path} ====")

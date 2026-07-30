@@ -8,11 +8,9 @@ import redis
 from dotenv import load_dotenv
 from redis.exceptions import RedisError
 
-from src.util.logger_crtx import create_logging_logger
+from src.util.logger_crtx import get_logger
 
-logger, is_airflow_env = create_logging_logger()
-if is_airflow_env:
-    from airflow.exceptions import AirflowException
+logger = get_logger(__name__)
 
 load_dotenv()
 redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -49,7 +47,7 @@ def create_redis_client() -> redis.Redis:
     """建立並測試 Redis 用戶端連線。
 
     固定使用 decode_responses=False 以支援 Pickle 二進位資料存取。
-    在出錯時會主動向上拋出原始錯誤，完整支援地端與 Airflow 容器環境。
+    在出錯時會主動向上拋出原始錯誤，保留完整 traceback 供呼叫端追查。
 
     Returns:
         redis.Redis: new Redis client
@@ -63,20 +61,12 @@ def create_redis_client() -> redis.Redis:
 
         # 2. 測試連線是否有效
         r.ping()
-    except RedisError as e:
-        logger.error(f"Redis connection error occurred: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed: Cannot connect to Redis cache server."
-            ) from e
+    except RedisError:
+        logger.error("Redis connection error occurred.", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error when creating Redis client: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed due to unexpected error."
-            ) from e
+    except Exception:
+        logger.error("Unexpected error when creating Redis client.", exc_info=True)
         raise
 
     else:
@@ -102,20 +92,14 @@ def set_cache(key: str, value, ttl: int = 864000) -> None:
         r.setex(key, ttl, packed_data)
         logger.info(f"Wrote and saved cache in Redis with key name: {key}")
 
-    except RedisError as e:
-        logger.error(f"Redis write error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Failed: Redis write error for key '{key}'."
-            ) from e
+    except RedisError:
+        logger.error(f"Redis write error for key '{key}'.", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error when writting to Redis: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed due to unexpected error."
-            ) from e
+    except Exception:
+        logger.error(
+            f"Unexpected error when writing to Redis for key '{key}'.", exc_info=True
+        )
         raise
 
 
@@ -139,20 +123,14 @@ def get_cache(key: str) -> dict | pd.DataFrame | None:
             return pickle.loads(data)
         return None
 
-    except RedisError as e:
-        logger.error(f"Redis read error: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Failed: Redis read error for key '{key}'."
-            ) from e
+    except RedisError:
+        logger.error(f"Redis read error for key '{key}'.", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error when writting to Redis: : {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed due to unexpected error."
-            ) from e
+    except Exception:
+        logger.error(
+            f"Unexpected error when reading from Redis for key '{key}'.", exc_info=True
+        )
         raise
 
 
@@ -164,29 +142,20 @@ def delete_cache(key: str) -> None:
 
     :params key: Redis key associated with the cached object to delete.
     :type key: str
-    :return: ``RedisError``: If the Redis delete operation fails.
-
-        ``AirflowException``: If running in Airflow and the cache deletion fails.
-
-        ``Exception``: For any unexpected error during the deletion process.
+    :raises RedisError: If the Redis delete operation fails.
+    :raises Exception: For any unexpected error during the deletion process.
     """
     try:
         r = create_redis_client()
         r.delete(key)
         logger.info(f"Deleted the cache in Redis with key name: {key}")
 
-    except RedisError as e:
-        logger.error(f"Error when deleting the key {key} in Redis: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                f"Airflow Task Failed: Redis delete error for key '{key}'."
-            ) from e
+    except RedisError:
+        logger.error(f"Redis delete error for key '{key}'.", exc_info=True)
         raise
 
-    except Exception as e:
-        logger.error(f"Unexpected error when deleting to Redis: {e}", exc_info=True)
-        if is_airflow_env:
-            raise AirflowException(
-                "Airflow Task Failed due to unexpected error."
-            ) from e
+    except Exception:
+        logger.error(
+            f"Unexpected error when deleting from Redis for key '{key}'.", exc_info=True
+        )
         raise
