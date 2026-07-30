@@ -52,24 +52,19 @@ def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
         except requests.exceptions.Timeout:
             logger.error(
                 f"Timeout occurred while fetching download links from {url}",
-                exc_info=True,
             )
             raise
         except requests.exceptions.ConnectionError:
             logger.error(
                 f"Connection error while fetching download links from {url}",
-                exc_info=True,
             )
             raise
         except requests.exceptions.HTTPError:
-            logger.error(
-                f"HTTP error while fetching download links from {url}", exc_info=True
-            )
+            logger.error(f"HTTP error while fetching download links from {url}")
             raise
         except Exception:
             logger.error(
                 f"Unexpected error while fetching download links from {url}",
-                exc_info=True,
             )
             raise
         else:
@@ -138,7 +133,7 @@ def download_and_extract_zip(
             )
             return None
     except Exception:
-        logger.error("下載或儲存zip檔案過程中發生錯誤", exc_info=True)
+        logger.error("下載或儲存zip檔案過程中發生錯誤")
         raise
     else:
         logger.info(f"====成功下載並儲存zip檔案至: {str(zipfile_path)}====")
@@ -184,7 +179,7 @@ def download_and_extract_zip(
                 return csvfile_pathlist  # 回傳找到的csv檔案路徑列表
 
     except Exception:
-        logger.error("解壓縮zip檔或存成csv檔的過程中發生錯誤", exc_info=True)
+        logger.error("解壓縮zip檔或存成csv檔的過程中發生錯誤")
         raise
 
 
@@ -227,7 +222,7 @@ def download_csv(
             )
             return None
     except Exception:
-        logger.error("下載或儲存csv檔案過程中發生錯誤", exc_info=True)
+        logger.error("下載或儲存csv檔案過程中發生錯誤")
         raise
     else:
         csvfile_pathlist.append(str(csvfile_path))

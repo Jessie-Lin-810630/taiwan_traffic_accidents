@@ -1,21 +1,31 @@
-import streamlit as st
+"""Streamlit 分頁：全台夜市事故嚴重度分析。"""
+
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
+import streamlit as st
+from redis.exceptions import RedisError
+
 import src.task.core.c_data_service as ds
 import src.task.core.c_ui as ui
-from src.util.get_or_set_cache_from_redis import get_cache, set_cache
+from src.util.logger_crtx import get_logger
+from src.util.redis_utils import get_cache
+
+logger = get_logger(__name__)
 
 st.set_page_config(layout="wide", page_title="全台夜市事故嚴重分析", page_icon="🚦")
 
 
-def get_region_or_cities(*, city: str | None = None, region: str | None = None) -> str | list | None:
-    cities_per_region = {"北部": ["臺北市", "新北市", "基隆市", "桃園市", "新竹市", "新竹縣"],
-                         "中部": ["臺中市", "彰化縣", "南投縣", "雲林縣", "苗栗縣"],
-                         "南部": ["臺南市", "高雄市", "屏東縣", "嘉義市", "嘉義縣"],
-                         "東部與東部離島": ["花蓮縣", "臺東縣", "宜蘭縣"],
-                         "其他離島": ["澎湖縣", "金門縣", "連江縣"]}
+def get_region_or_cities(
+    *, city: str | None = None, region: str | None = None
+) -> str | list | None:
+    """由縣市反查所屬地區，或由地區取得其縣市清單（兩者只能擇一傳入）。"""
+    cities_per_region = {
+        "北部": ["臺北市", "新北市", "基隆市", "桃園市", "新竹市", "新竹縣"],
+        "中部": ["臺中市", "彰化縣", "南投縣", "雲林縣", "苗栗縣"],
+        "南部": ["臺南市", "高雄市", "屏東縣", "嘉義市", "嘉義縣"],
+        "東部與東部離島": ["花蓮縣", "臺東縣", "宜蘭縣"],
+        "其他離島": ["澎湖縣", "金門縣", "連江縣"],
+    }
     if city and region:
         return "只能傳入city或region任一！"
 
@@ -36,6 +46,7 @@ def get_region_or_cities(*, city: str | None = None, region: str | None = None) 
 # 這樣使用者在切換篩選條件時，就不必重新去 Redis 撈取幾十 MB 的大表
 @st.cache_data(ttl=36000, show_spinner=False)
 def get_dynamic_national_data() -> pd.DataFrame:
+    """讀取預計算的全台總表，並剔除跨夜市重疊的重複事故。"""
     cache_key = "market:national_master_df"  # 理應在dags/d_redis_precompute.py存入Redis
     unpickled_data = get_cache(cache_key)
     # unpickled_data = pd.DataFrame(unpickled_data)
@@ -43,20 +54,32 @@ def get_dynamic_national_data() -> pd.DataFrame:
         # 確保跨夜市 500公尺重疊區域的事故不被重複計算
         # 去重複機制
         # 因為台北市等密集區，多個夜市的 500m 範圍會重疊。此處利用 accident_id 剔除重複計算的事故，確保「全台總數」的準確性
-        if 'accident_id' in unpickled_data.columns:
-            df = unpickled_data.drop_duplicates(subset=['accident_id'])
+        if "accident_id" in unpickled_data.columns:
+            df = unpickled_data.drop_duplicates(subset=["accident_id"])
             return df
     return pd.DataFrame()
 
 
 def main() -> None:
-    df_market = ds.get_all_nightmarkets()
+    """組出分頁版面，載入全台總表並依使用者篩選繪圖。"""
+    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
+    try:
+        df_market = ds.get_all_nightmarkets()
+    except Exception:
+        # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+        logger.error("資料服務讀取失敗", exc_info=True)
+        st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
+        st.stop()
+
     ui.render_sidebar(df_market)
     ui.load_custom_css()
 
-    st.markdown("""
+    st.markdown(
+        """
                 <h1 style="margin-bottom:5px;">🚦 臺灣夜市交通安全總體檢：<span class="title-highlight">全台數據揭密</span></h1>
-                """, unsafe_allow_html=True)
+                """,
+        unsafe_allow_html=True,
+    )
 
     st.info("""
             💡 **數據判讀須知**：
@@ -64,45 +87,71 @@ def main() -> None:
             2. **時間完整性**：⚠️ **2026 Q1 數據目前僅統計至 1 月份**。季度比較趨勢之落差係因資料統計週期不完整所致，非實際事故量大幅下降，判讀時請留意。
             """)
 
-    st.markdown("<hr style='margin-top: 5px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+    st.markdown(
+        "<hr style='margin-top: 5px; margin-bottom: 20px;'>", unsafe_allow_html=True
+    )
 
     with st.spinner("正在載入全台數據..."):
-        df_raw = get_dynamic_national_data()
+        try:
+            df_raw = get_dynamic_national_data()
+        except RedisError:
+            # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+            # 前者拋 RedisError，後者才會回傳空表。
+            logger.error("全台總表快取讀取失敗", exc_info=True)
+            st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
+            st.stop()
 
     if df_raw.empty:
         # aggregate_national_master寫在dags/d_redis_precompute.py
-        st.warning("⚠️ 無法取得全台總表，請確認 Airflow 的 `aggregate_national_master` 排程是否已執行完成。")
+        st.warning(
+            "⚠️ 無法取得全台總表，請確認 Airflow 的 `aggregate_national_master` 排程是否已執行完成。"
+        )
         return None
 
-    df_raw = df_raw.dropna(subset=['nightmarket_city'])
-    df_raw = df_raw[df_raw['nightmarket_city'].astype(str).str.strip() != 'None']
-    df_raw = df_raw[df_raw['nightmarket_city'].astype(str).str.strip() != '']
+    df_raw = df_raw.dropna(subset=["nightmarket_city"])
+    df_raw = df_raw[df_raw["nightmarket_city"].astype(str).str.strip() != "None"]
+    df_raw = df_raw[df_raw["nightmarket_city"].astype(str).str.strip() != ""]
 
     # 左側放篩選器，右側放核心數據指標與熱力圖
     col_left, col_right = st.columns([0.7, 2.3], gap="large")
 
     with col_left:
-        st.markdown('<div class="section-title" style="margin-bottom:8px;">切換分析視角</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-title" style="margin-bottom:8px;">切換分析視角</div>',
+            unsafe_allow_html=True,
+        )
 
         # 彈性切換分析指標
         # 讓使用者可以一鍵切換整頁的計算指標，依照選擇，下方的變數 (metric_col, agg_func) 自動配合變動
         options = ["綜合危險指數 (PDI)", "事故總件數"]
-        mode = st.radio("切換分析視角",
-                        options,
-                        horizontal=True,
-                        label_visibility="collapsed")
+        mode = st.radio(
+            "切換分析視角", options, horizontal=True, label_visibility="collapsed"
+        )
 
         # 描述連動邏輯
         if mode == options[0]:
-            metric_col, agg_func, unit, fmt, sort_col = 'pdi_score', 'mean', "分", ",.2f", "PDI平均"
+            metric_col, agg_func, unit, fmt, sort_col = (
+                "pdi_score",
+                "mean",
+                "分",
+                ",.2f",
+                "PDI平均",
+            )
         elif mode == options[1]:
-            metric_col, agg_func, unit, fmt, sort_col = 'accident_id', 'count', "件", ",.0f", "事故總數"
+            metric_col, agg_func, unit, fmt, sort_col = (
+                "accident_id",
+                "count",
+                "件",
+                ",.0f",
+                "事故總數",
+            )
 
         # 確認使用者是否點選了要分析PDI指標，回傳boolean
-        is_pdi_mode = (mode == options[0])
+        is_pdi_mode = mode == options[0]
 
         # PDI 說明提醒
-        st.markdown("""
+        st.markdown(
+            """
         <div style="background-color: #f8fafc; border-left: 4px solid #94a3b8; padding: 16px; border-radius: 0 8px 8px 0; margin-bottom: 25px; margin-top: 10px;">
             <div style="font-weight: bold; color: #475569; margin-bottom: 8px; font-size: 14px;">💡 什麼是 PDI 危險指數？</div>
             <ul style="font-size: 13px; color: #475569; line-height: 1.7; margin-bottom: 0; padding-left: 20px;">
@@ -111,58 +160,97 @@ def main() -> None:
                 <li><b>判定：</b> 數值越高代表一旦發生事故「非死即傷」機率越高。</li>
             </ul>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         # 時間篩選清單
-        st.markdown('<div class="section-title">📅 篩選分析時間</div>', unsafe_allow_html=True)
-        week_map = {0: "全部", 1: "週一", 2: "週二", 3: "週三", 4: "週四", 5: "週五", 6: "週六", 7: "週日"}
+        st.markdown(
+            '<div class="section-title">📅 篩選分析時間</div>', unsafe_allow_html=True
+        )
+        week_map = {
+            0: "全部",
+            1: "週一",
+            2: "週二",
+            3: "週三",
+            4: "週四",
+            5: "週五",
+            6: "週六",
+            7: "週日",
+        }
         with st.container(border=True):
             l_c1, l_c2 = st.columns(2)
             with l_c1:
-                sel_year = st.selectbox("年份", ["全部年份", "2026", "2025", "2024", "2023", "2022", "2021"])
+                sel_year = st.selectbox(
+                    "年份", ["全部年份", "2026", "2025", "2024", "2023", "2022", "2021"]
+                )
             with l_c2:
-                sel_q = st.selectbox("季度", ["全年", "第 1 季", "第 2 季", "第 3 季", "第 4 季"])
+                sel_q = st.selectbox(
+                    "季度", ["全年", "第 1 季", "第 2 季", "第 3 季", "第 4 季"]
+                )
 
             l_c3, l_c4 = st.columns(2)
             with l_c3:
-                sel_m = st.selectbox("月份", ["全部"] + [f"{i} 月" for i in range(1, 13)])
+                sel_m = st.selectbox(
+                    "月份", ["全部"] + [f"{i} 月" for i in range(1, 13)]
+                )
 
             with l_c4:
                 sel_w = st.selectbox("星期", list(week_map.values()))
 
-            heat_mode = st.radio("時段", ["全部", "白天 (06-18)", "夜間 (18-06)"], horizontal=True)
+            heat_mode = st.radio(
+                "時段", ["全部", "白天 (06-18)", "夜間 (18-06)"], horizontal=True
+            )
 
         # 依據使用者的 UI 選擇，層層過濾 DataFrame。
         df_filtered = df_raw.copy()
         if sel_year != "全部年份":
-            df_filtered = df_filtered[df_filtered['Year'] == int(sel_year)]
+            df_filtered = df_filtered[df_filtered["Year"] == int(sel_year)]
         if sel_q != "全年":
-            df_filtered = df_filtered[df_filtered['Quarter'] == int(sel_q.split()[1])]
+            df_filtered = df_filtered[df_filtered["Quarter"] == int(sel_q.split()[1])]
         if sel_m != "全部":
-            df_filtered = df_filtered[df_filtered['Month'] == int(sel_m.split()[0])]
+            df_filtered = df_filtered[df_filtered["Month"] == int(sel_m.split()[0])]
         if sel_w != "全部":
-            df_filtered = df_filtered[df_filtered['Weekday'] == {v: k for k, v in week_map.items()}[sel_w]]
+            df_filtered = df_filtered[
+                df_filtered["Weekday"] == {v: k for k, v in week_map.items()}[sel_w]
+            ]
         if "白天" in heat_mode:
-            df_filtered = df_filtered[(df_filtered['Hour'] >= 6) & (df_filtered['Hour'] < 18)]
+            df_filtered = df_filtered[
+                (df_filtered["Hour"] >= 6) & (df_filtered["Hour"] < 18)
+            ]
         elif "夜間" in heat_mode:
-            df_filtered = df_filtered[(df_filtered['Hour'] >= 18) | (df_filtered['Hour'] < 6)]
+            df_filtered = df_filtered[
+                (df_filtered["Hour"] >= 18) | (df_filtered["Hour"] < 6)
+            ]
 
         df_trend_base = df_raw.copy()
         if sel_q != "全年":
-            df_trend_base = df_trend_base[df_trend_base['Quarter'] == int(sel_q.split()[1])]
+            df_trend_base = df_trend_base[
+                df_trend_base["Quarter"] == int(sel_q.split()[1])
+            ]
         if sel_m != "全部":
-            df_trend_base = df_trend_base[df_trend_base['Month'] == int(sel_m.split()[0])]
+            df_trend_base = df_trend_base[
+                df_trend_base["Month"] == int(sel_m.split()[0])
+            ]
         if sel_w != "全部":
-            df_trend_base = df_trend_base[df_trend_base['Weekday'] == {v: k for k, v in week_map.items()}[sel_w]]
+            df_trend_base = df_trend_base[
+                df_trend_base["Weekday"] == {v: k for k, v in week_map.items()}[sel_w]
+            ]
         if "白天" in heat_mode:
-            df_trend_base = df_trend_base[(df_trend_base['Hour'] >= 6) & (df_trend_base['Hour'] < 18)]
+            df_trend_base = df_trend_base[
+                (df_trend_base["Hour"] >= 6) & (df_trend_base["Hour"] < 18)
+            ]
         elif "夜間" in heat_mode:
-            df_trend_base = df_trend_base[(df_trend_base['Hour'] >= 18) | (df_trend_base['Hour'] < 6)]
+            df_trend_base = df_trend_base[
+                (df_trend_base["Hour"] >= 18) | (df_trend_base["Hour"] < 6)
+            ]
 
     with col_right:
         if not df_filtered.empty:
             # 算平均值或直接計數
-            city_current_totals = df_filtered.groupby("nightmarket_city")[metric_col].agg(agg_func)
+            city_current_totals = df_filtered.groupby("nightmarket_city")[
+                metric_col
+            ].agg(agg_func)
 
             # 利用 sort_values做降冪排列後，取 .iloc[0]，.iloc[-1] 代表第一名與最後一名
             sorted_totals = city_current_totals.sort_values(ascending=False)
@@ -177,7 +265,7 @@ def main() -> None:
             national_avg = city_current_totals.mean()
 
             # 計算中位數，全台22個縣市，如果22個縣市都有參戰，擇取第十名；否則就抓"對半後取整數位"以後得到的那一名。
-            mid_idx = 10 if len(sorted_totals) >= 11 else int(len(sorted_totals)/2)
+            mid_idx = 10 if len(sorted_totals) >= 11 else int(len(sorted_totals) / 2)
             mid_val = sorted_totals.iloc[mid_idx]
             mid_city = sorted_totals.index[mid_idx]
 
@@ -191,30 +279,53 @@ def main() -> None:
                 c_mid = mid_val  # 將中位數作為基準
                 mid_city_display = f"{mid_city}"  # 將中位數的對應縣市作為基準
                 mid_diff = c_mid - national_avg  # 計算中位數與平均值差異
-                mid_pct = (mid_diff / national_avg * 100) if national_avg > 0 else 0  # 轉成差異百分比
+                mid_pct = (
+                    (mid_diff / national_avg * 100) if national_avg > 0 else 0
+                )  # 轉成差異百分比
                 sign = "+" if mid_diff > 0 else ""
-                mid_color = "#ef4444" if mid_diff > 0 else ("#10b981" if mid_diff < 0 else "#475569")
-                mid_bg = "#fee2e2" if mid_diff > 0 else ("#d1fae5" if mid_diff < 0 else "#f1f5f9")
-                mid_prefix = "高於國均" if mid_diff > 0 else ("低於國均" if mid_diff < 0 else "持平國均")
+                mid_color = (
+                    "#ef4444"
+                    if mid_diff > 0
+                    else ("#10b981" if mid_diff < 0 else "#475569")
+                )
+                mid_bg = (
+                    "#fee2e2"
+                    if mid_diff > 0
+                    else ("#d1fae5" if mid_diff < 0 else "#f1f5f9")
+                )
+                mid_prefix = (
+                    "高於國均"
+                    if mid_diff > 0
+                    else ("低於國均" if mid_diff < 0 else "持平國均")
+                )
                 mid_tag_html = f"""<div style="font-size: 12px; color: {mid_color}; background: {mid_bg}; padding: 2px 8px; border-radius: 4px; display: inline-block; font-weight: bold;">{mid_prefix} {sign}{mid_diff:{fmt}} ({mid_pct:+.1f}%)  |  國均數 {national_avg:{fmt}} {unit}</div>"""
 
             # 幫最好的一名計算，與平均值的差距
             max_diff = c_max - national_avg
             max_pct = (max_diff / national_avg * 100) if national_avg > 0 else 0
             max_sign = "+" if max_diff > 0 else ""
-            max_prefix = "高於國均" if max_diff > 0 else ("低於國均" if max_diff < 0 else "持平國均")
+            max_prefix = (
+                "高於國均"
+                if max_diff > 0
+                else ("低於國均" if max_diff < 0 else "持平國均")
+            )
 
             # 幫最差的一名計算，與平均值的差距
             min_diff = c_min - national_avg
             min_pct = (min_diff / national_avg * 100) if national_avg > 0 else 0
             min_sign = "+" if min_diff > 0 else ""
-            min_prefix = "高於國均" if min_diff > 0 else ("低於國均" if min_diff < 0 else "持平國均")
+            min_prefix = (
+                "高於國均"
+                if min_diff > 0
+                else ("低於國均" if min_diff < 0 else "持平國均")
+            )
 
             mode_title = "🚦 區域安全基準線 (以目前篩選條件下數據為準)"
 
             # UI 互動設計：HTML 客製化卡片
             # 建立三張並排的數據看板，利用 CSS Flexbox (display: flex; gap: 15px;) 達成自動排版與間距控制
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div style="margin-bottom: 25px;">
                 <div style="font-size: 15px; color: #1e293b; font-weight: bold; margin-bottom: 12px;">{mode_title}</div>
                 <div style="display: flex; gap: 15px;">
@@ -227,7 +338,7 @@ def main() -> None:
                         </div>
                     </div>
                     <div style="flex: 1; background-color: #ffffff; padding: 15px 20px; border-radius: 8px; border: 1px solid #e2e8f0; border-top: 4px solid #64748b; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                        <div style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 4px;">🎯 {'中線基準 (Median)' if not is_pdi_mode else '全國平均線'}</div>
+                        <div style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 4px;">🎯 {"中線基準 (Median)" if not is_pdi_mode else "全國平均線"}</div>
                         <div style="font-size: 18px; font-weight: 900; color: #1e293b; margin-bottom: 2px;">{mid_city_display}</div>
                         <div style="font-size: 24px; font-weight: bold; color: #334155; margin-bottom: 6px;">{c_mid:{fmt}} <span style="font-size:14px; font-weight:normal;">{unit}</span></div>
                         {mid_tag_html}
@@ -242,28 +353,39 @@ def main() -> None:
                     </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
         if not df_filtered.empty:
-            st.markdown(f'<div class="section-title">🔥 縣市排行 TOP 5</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="section-title">🔥 縣市排行 TOP 5</div>',
+                unsafe_allow_html=True,
+            )
 
             # 一次性計算出各縣市的事故總數、PDI平均、死傷總數，供後續卡片與表格使用
-            rank_df = df_filtered.groupby("nightmarket_city").agg(
-                事故總數=("accident_id", "count"),
-                PDI平均=("pdi_score", "mean"),
-                死亡總數=("death_count", "sum"),
-                受傷總數=("injury_count", "sum")
-            ).reset_index().rename(columns={"nightmarket_city": "城市"})
+            rank_df = (
+                df_filtered.groupby("nightmarket_city")
+                .agg(
+                    事故總數=("accident_id", "count"),
+                    PDI平均=("pdi_score", "mean"),
+                    死亡總數=("death_count", "sum"),
+                    受傷總數=("injury_count", "sum"),
+                )
+                .reset_index()
+                .rename(columns={"nightmarket_city": "城市"})
+            )
 
             # 根據使用者選擇的分析指標連動，排名依據，且只回傳前五個最好的縣市。
             city_top5 = rank_df.sort_values(sort_col, ascending=False).head(5)
 
-            rank_colors = ["linear-gradient(135deg, #1e3a8a, #1d4ed8)",
-                           "linear-gradient(135deg, #1e40af, #2563eb)",
-                           "linear-gradient(135deg, #1d4ed8, #3b82f6)",
-                           "linear-gradient(135deg, #2563eb, #60a5fa)",
-                           "linear-gradient(135deg, #3b82f6, #93c5fd)"
-                           ]
+            rank_colors = [
+                "linear-gradient(135deg, #1e3a8a, #1d4ed8)",
+                "linear-gradient(135deg, #1e40af, #2563eb)",
+                "linear-gradient(135deg, #1d4ed8, #3b82f6)",
+                "linear-gradient(135deg, #2563eb, #60a5fa)",
+                "linear-gradient(135deg, #3b82f6, #93c5fd)",
+            ]
 
             cols_city = st.columns(5)
 
@@ -276,7 +398,11 @@ def main() -> None:
                 main_val = row[sort_col]  # 成績
 
                 diff_val = main_val - national_avg_total
-                diff_pct = (diff_val / national_avg_total * 100) if national_avg_total > 0 else 0
+                diff_pct = (
+                    (diff_val / national_avg_total * 100)
+                    if national_avg_total > 0
+                    else 0
+                )
 
                 if diff_val > 0:
                     nat_icon = "🔴"
@@ -287,7 +413,7 @@ def main() -> None:
 
                 with cols_city[idx]:
                     html_card = f"""<div class="pdi-card" style="background:{bg_color}; padding:15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-<div style="font-size:12px; font-weight:bold; margin-bottom:5px; color:rgba(255,255,255,0.9);">🏆 第 {idx+1} 名</div>
+<div style="font-size:12px; font-weight:bold; margin-bottom:5px; color:rgba(255,255,255,0.9);">🏆 第 {idx + 1} 名</div>
 <div style="font-size:20px; font-weight:900; margin-bottom:5px; color:#ffffff;">{city_name}</div>
 <div style="font-size:22px; font-weight:bold; margin-bottom:12px; color:#ffffff;">{main_val:{fmt}} <span style="font-size:13px;">{unit}</span></div>
 <div style="font-size:12.5px; background:rgba(0,0,0,0.25); padding:6px 8px; border-radius:5px; color:#ffffff;">
@@ -299,49 +425,71 @@ def main() -> None:
             st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
 
             st.markdown(
-                f"<div style='font-size:16px; font-weight:bold; color:#1f2937; margin-bottom:10px;'>📊 各縣市 {mode} 現況排名總表</div>", unsafe_allow_html=True)
+                f"<div style='font-size:16px; font-weight:bold; color:#1f2937; margin-bottom:10px;'>📊 各縣市 {mode} 現況排名總表</div>",
+                unsafe_allow_html=True,
+            )
 
-            full_rank_df = rank_df.sort_values(sort_col, ascending=False).reset_index(drop=True)
-            full_rank_df.insert(0, '排名', range(1, len(full_rank_df) + 1))
+            full_rank_df = rank_df.sort_values(sort_col, ascending=False).reset_index(
+                drop=True
+            )
+            full_rank_df.insert(0, "排名", range(1, len(full_rank_df) + 1))
 
-            full_rank_df['數值_str'] = full_rank_df[sort_col].apply(lambda x: f"{x:{fmt}}")
-            full_rank_df['排名_str'] = full_rank_df['排名'].astype(str)
+            full_rank_df["數值_str"] = full_rank_df[sort_col].apply(
+                lambda x: f"{x:{fmt}}"
+            )
+            full_rank_df["排名_str"] = full_rank_df["排名"].astype(str)
 
             # 資料轉置：DataFrame Transpose (.T)
             # 將直式的資料表轉為橫式，展示多個縣市的單一指標比較
-            df_transposed = full_rank_df[['城市', '排名_str', '數值_str']].set_index('城市').T
-            df_transposed.index = ['排名', f'{mode}']
+            df_transposed = (
+                full_rank_df[["城市", "排名_str", "數值_str"]].set_index("城市").T
+            )
+            df_transposed.index = ["排名", f"{mode}"]
 
             with st.container(border=True):
                 st.dataframe(df_transposed, width=True)
 
             st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
 
-        st.markdown('<div class="section-title" style="margin-bottom: 2px;">🗺️ 雙維度歷年矩陣對比 (嚴重度 vs 全台名次)</div>',
-                    unsafe_allow_html=True)
         st.markdown(
-            "<div style='font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px;'>🔍 快速定位區域</div>", unsafe_allow_html=True)
+            '<div class="section-title" style="margin-bottom: 2px;">🗺️ 雙維度歷年矩陣對比 (嚴重度 vs 全台名次)</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px;'>🔍 快速定位區域</div>",
+            unsafe_allow_html=True,
+        )
 
-        region_filter = st.radio("定位區域", ["全台", "北部", "中部", "南部", "東部與東部離島", "離島"],
-                                 horizontal=True, label_visibility="collapsed")
+        region_filter = st.radio(
+            "定位區域",
+            ["全台", "北部", "中部", "南部", "東部與東部離島", "離島"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
 
         if not df_trend_base.empty:
             # 以縣市為 Y 軸，年份為 X 軸，數值為儲存格內容，建立熱力圖所需的矩陣資料(Pivot Table)
-            heatmap_data = df_trend_base.pivot_table(index='nightmarket_city',
-                                                     columns='Year',
-                                                     values=metric_col,
-                                                     aggfunc=agg_func,
-                                                     fill_value=0)
+            heatmap_data = df_trend_base.pivot_table(
+                index="nightmarket_city",
+                columns="Year",
+                values=metric_col,
+                aggfunc=agg_func,
+                fill_value=0,
+            )
 
             # 計算每個年份的排名矩陣 (以欄 Column 進行獨立排名)
-            heatmap_rank = heatmap_data.rank(ascending=False, method='min')
+            heatmap_rank = heatmap_data.rank(ascending=False, method="min")
 
             if region_filter == "全台":
                 target_regions = ["北部", "中部", "南部", "東部與東部離島", "其他離島"]
             else:
                 target_regions = [region_filter]
 
-            valid_cities = [city for region in target_regions for city in get_region_or_cities(region=region)]
+            valid_cities = [
+                city
+                for region in target_regions
+                for city in get_region_or_cities(region=region)
+            ]
             available_cities = [c for c in valid_cities if c in heatmap_data.index]
 
             heatmap_data = heatmap_data.reindex(available_cities)
@@ -354,43 +502,69 @@ def main() -> None:
 
             with col_hm_left:
                 st.markdown(
-                    f"<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>數值熱力圖 ({mode})</div>", unsafe_allow_html=True)
+                    f"<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>數值熱力圖 ({mode})</div>",
+                    unsafe_allow_html=True,
+                )
 
                 # Plotly 熱力圖
                 # 利用顏色深淺呈現各縣市歷年的指標變化。colorscale='Blues' 數值越大顏色越深
-                fig_heat_val = go.Figure(data=go.Heatmap(
-                    z=heatmap_data.values,
-                    x=heatmap_data.columns,
-                    y=heatmap_data.index,
-                    colorscale='Blues',
-                    texttemplate="<b>%{z:,.2f}</b>" if is_pdi_mode else "<b>%{z:,.0f}</b>",
-                    hovertemplate="年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.2f}<extra></extra>" if is_pdi_mode else "年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.0f}<extra></extra>",
-                    textfont=dict(size=14)))
+                fig_heat_val = go.Figure(
+                    data=go.Heatmap(
+                        z=heatmap_data.values,
+                        x=heatmap_data.columns,
+                        y=heatmap_data.index,
+                        colorscale="Blues",
+                        texttemplate="<b>%{z:,.2f}</b>"
+                        if is_pdi_mode
+                        else "<b>%{z:,.0f}</b>",
+                        hovertemplate="年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.2f}<extra></extra>"
+                        if is_pdi_mode
+                        else "年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.0f}<extra></extra>",
+                        textfont=dict(size=14),
+                    )
+                )
 
                 fig_heat_val.update_layout(
-                    height=matrix_height, margin=dict(l=0, r=0, t=10, b=0),
-                    xaxis=dict(side='top', tickmode='linear', dtick=1),  # 把 X 軸(年份)移到上方
-                    yaxis=dict(categoryorder='array', categoryarray=available_cities[::-1]))
+                    height=matrix_height,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis=dict(
+                        side="top", tickmode="linear", dtick=1
+                    ),  # 把 X 軸(年份)移到上方
+                    yaxis=dict(
+                        categoryorder="array", categoryarray=available_cities[::-1]
+                    ),
+                )
 
                 st.plotly_chart(fig_heat_val, width=True)
 
             with col_hm_right:
                 st.markdown(
-                    "<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>名次熱力圖 (全台 22 縣市比較)</div>", unsafe_allow_html=True)
-                fig_heat_rank = go.Figure(data=go.Heatmap(
-                    z=heatmap_rank.values,
-                    x=heatmap_rank.columns,
-                    y=heatmap_rank.index,
-                    colorscale='Blues_r',  # 反轉色系 (Blues_r)，讓數字越小(第1名)顏色越深
-                    texttemplate="<b>第 %{z:.0f} 名</b>",
-                    hovertemplate="年份: %{x}<br>縣市: %{y}<br>名次: 第 %{z:.0f} 名<extra></extra>",
-                    textfont=dict(size=14)))
+                    "<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>名次熱力圖 (全台 22 縣市比較)</div>",
+                    unsafe_allow_html=True,
+                )
+                fig_heat_rank = go.Figure(
+                    data=go.Heatmap(
+                        z=heatmap_rank.values,
+                        x=heatmap_rank.columns,
+                        y=heatmap_rank.index,
+                        colorscale="Blues_r",  # 反轉色系 (Blues_r)，讓數字越小(第1名)顏色越深
+                        texttemplate="<b>第 %{z:.0f} 名</b>",
+                        hovertemplate="年份: %{x}<br>縣市: %{y}<br>名次: 第 %{z:.0f} 名<extra></extra>",
+                        textfont=dict(size=14),
+                    )
+                )
 
                 fig_heat_rank.update_layout(
-                    height=matrix_height, margin=dict(l=0, r=0, t=10, b=0),
-                    xaxis=dict(side='top', tickmode='linear', dtick=1),
+                    height=matrix_height,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis=dict(side="top", tickmode="linear", dtick=1),
                     # 隱藏右側圖表的 Y 軸文字，避免重複
-                    yaxis=dict(categoryorder='array', categoryarray=available_cities[::-1], showticklabels=False))
+                    yaxis=dict(
+                        categoryorder="array",
+                        categoryarray=available_cities[::-1],
+                        showticklabels=False,
+                    ),
+                )
 
                 st.plotly_chart(fig_heat_rank, width=True)
 

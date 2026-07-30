@@ -159,7 +159,7 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
             result = _extracted_from_inspect_table(full_table_path, conn)
             logger.info(f"{result}")
     except Exception:
-        logger.error(f"Error inspecting {full_table_path}", exc_info=True)
+        logger.error(f"Error inspecting {full_table_path}")
         raise
 
 
@@ -184,17 +184,14 @@ def create_database(engine: Engine, database_name: str) -> None:
             logger.info(f"Database '{database_name}' checked/created successfully.")
 
     except SQLAlchemyError:
-        # exc_info=True 會將完整的資料庫 Traceback 寫入 Airflow /logs/
         logger.error(
-            f"SQLAlchemy database error occurred while creating '{database_name}'.",
-            exc_info=True,
+            f"SQLAlchemy database error occurred while creating '{database_name}'."
         )
         raise
 
     except Exception:
         logger.error(
             f"Unexpected error occurred while creating '{database_name}'.",
-            exc_info=True,
         )
         raise
 
@@ -232,12 +229,11 @@ def create_tables(engine: Engine, tables: dict[str, str]) -> None:
                 logger.info(f"Table '{table_name}' created successfully.")
 
     except SQLAlchemyError:
-        # exc_info=True 會將完整的資料庫 Traceback 寫入 Airflow /logs/
-        logger.error("SQLAlchemy error occurred during table creation.", exc_info=True)
+        logger.error("SQLAlchemy error occurred during table creation.")
         raise
 
     except Exception:
-        logger.error("Unexpected error occurred during table creation.", exc_info=True)
+        logger.error("Unexpected error occurred during table creation.")
         raise
 
     finally:
@@ -300,14 +296,14 @@ def upsert_to_table(
 
     except pymysql.MySQLError:
         # 4. 資料庫例外處理：復原事務，並重新拋出原始錯誤
-        logger.error(f"Database error while inserting into `{table}`.", exc_info=True)
+        logger.error(f"Database error while inserting into `{table}`.")
         if conn:
             conn.rollback()
             logger.info("Transaction rollbacked successfully.")
         raise
 
     except Exception:
-        logger.error(f"Unexpected error while inserting into `{table}`.", exc_info=True)
+        logger.error(f"Unexpected error while inserting into `{table}`.")
         if conn:
             conn.rollback()
         raise

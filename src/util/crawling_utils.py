@@ -44,19 +44,19 @@ def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
             soup = BeautifulSoup(response.text, "html.parser")
 
         except requests.exceptions.Timeout:
-            logger.error(f"請求超時 (Timeout) -> URL: {url}", exc_info=True)
+            logger.error(f"請求超時 (Timeout) -> URL: {url}")
             raise
 
         except requests.exceptions.ConnectionError:
-            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}", exc_info=True)
+            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}")
             raise
 
         except requests.exceptions.HTTPError:
-            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}", exc_info=True)
+            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}")
             raise
 
         except Exception:
-            logger.error(f"未預期的錯誤 -> URL: {url}", exc_info=True)
+            logger.error(f"未預期的錯誤 -> URL: {url}")
             raise
 
         else:
@@ -105,19 +105,19 @@ def iterate_crawling_similar_urls(urls: list[str], headers: dict) -> dict:
             soup = BeautifulSoup(response.text, "html.parser")
 
         except requests.exceptions.Timeout:
-            logger.error(f"請求超時 (Timeout) -> URL: {url}", exc_info=True)
+            logger.error(f"請求超時 (Timeout) -> URL: {url}")
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
         except requests.exceptions.ConnectionError:
-            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}", exc_info=True)
+            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}")
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
         except requests.exceptions.HTTPError:
-            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}", exc_info=True)
+            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}")
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
         except Exception:
-            logger.error(f"未預期的錯誤 -> URL: {url}", exc_info=True)
+            logger.error(f"未預期的錯誤 -> URL: {url}")
             raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
 
         else:
@@ -191,19 +191,19 @@ def download_and_extract_zip(
                     f.write(chunk)
 
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout -> URL: {download_link}", exc_info=True)
+        logger.error(f"Timeout -> URL: {download_link}")
         raise
 
     except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error -> URL: {download_link}", exc_info=True)
+        logger.error(f"Connection error -> URL: {download_link}")
         raise
 
     except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error -> URL: {download_link}", exc_info=True)
+        logger.error(f"HTTP error -> URL: {download_link}")
         raise
 
     except Exception:
-        logger.error("Unexpected error during zip download or save.", exc_info=True)
+        logger.error("Unexpected error during zip download or save.")
         raise
 
     else:
@@ -251,9 +251,7 @@ def download_and_extract_zip(
                     #     df = pd.read_csv(source)
                     #     csvfile_pathlist.append(df)
     except Exception:
-        logger.error(
-            "Unexpected error during zip extraction or CSV save.", exc_info=True
-        )
+        logger.error("Unexpected error during zip extraction or CSV save.")
         raise
 
     logger.info(
@@ -305,19 +303,19 @@ def download_csv(
                     f.write(chunk)
 
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout -> URL: {download_link}", exc_info=True)
+        logger.error(f"Timeout -> URL: {download_link}")
         raise
 
     except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error -> URL: {download_link}", exc_info=True)
+        logger.error(f"Connection error -> URL: {download_link}")
         raise
 
     except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error -> URL: {download_link}", exc_info=True)
+        logger.error(f"HTTP error -> URL: {download_link}")
         raise
 
     except Exception:
-        logger.error("Unexpected error during CSV download.", exc_info=True)
+        logger.error("Unexpected error during CSV download.")
         raise
 
     logger.info(f"==== CSV saved to: {csvfile_path} ====")

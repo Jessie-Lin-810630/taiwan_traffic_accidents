@@ -62,11 +62,11 @@ def create_redis_client() -> redis.Redis:
         # 2. 測試連線是否有效
         r.ping()
     except RedisError:
-        logger.error("Redis connection error occurred.", exc_info=True)
+        logger.error("Redis connection error occurred.")
         raise
 
     except Exception:
-        logger.error("Unexpected error when creating Redis client.", exc_info=True)
+        logger.error("Unexpected error when creating Redis client.")
         raise
 
     else:
@@ -93,13 +93,11 @@ def set_cache(key: str, value, ttl: int = 864000) -> None:
         logger.info(f"Wrote and saved cache in Redis with key name: {key}")
 
     except RedisError:
-        logger.error(f"Redis write error for key '{key}'.", exc_info=True)
+        logger.error(f"Redis write error for key '{key}'.")
         raise
 
     except Exception:
-        logger.error(
-            f"Unexpected error when writing to Redis for key '{key}'.", exc_info=True
-        )
+        logger.error(f"Unexpected error when writing to Redis for key '{key}'.")
         raise
 
 
@@ -124,13 +122,11 @@ def get_cache(key: str) -> dict | pd.DataFrame | None:
         return None
 
     except RedisError:
-        logger.error(f"Redis read error for key '{key}'.", exc_info=True)
+        logger.error(f"Redis read error for key '{key}'.")
         raise
 
     except Exception:
-        logger.error(
-            f"Unexpected error when reading from Redis for key '{key}'.", exc_info=True
-        )
+        logger.error(f"Unexpected error when reading from Redis for key '{key}'.")
         raise
 
 
@@ -151,11 +147,9 @@ def delete_cache(key: str) -> None:
         logger.info(f"Deleted the cache in Redis with key name: {key}")
 
     except RedisError:
-        logger.error(f"Redis delete error for key '{key}'.", exc_info=True)
+        logger.error(f"Redis delete error for key '{key}'.")
         raise
 
     except Exception:
-        logger.error(
-            f"Unexpected error when deleting from Redis for key '{key}'.", exc_info=True
-        )
+        logger.error(f"Unexpected error when deleting from Redis for key '{key}'.")
         raise

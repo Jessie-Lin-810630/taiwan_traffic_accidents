@@ -53,7 +53,7 @@ def analysis_pedestrian_accidents():
             logger.info(f"type of sql_str: {type(sql_str)}")
             cursor.execute(sql_str)
         except Exception:
-            logger.error("SQL執行失敗", exc_info=True)
+            logger.error("SQL執行失敗")
             if conn:
                 conn.rollback()
             raise
@@ -101,7 +101,7 @@ def analysis_pedestrian_accidents():
             conn.commit()
             logger.info("全數sql file解析且執行完成!")
         except Exception:
-            logger.error(f"處理 sql file 失敗: {file_path}", exc_info=True)
+            logger.error(f"處理 sql file 失敗: {file_path}")
             if conn:
                 conn.rollback()
             raise

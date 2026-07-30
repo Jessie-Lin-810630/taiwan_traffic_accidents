@@ -67,16 +67,16 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
             soup = BeautifulSoup(response.text, "html.parser")
 
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout while fetching from {url}", exc_info=True)
+        logger.error(f"Timeout while fetching from {url}")
         raise
     except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error while fetching from {url}", exc_info=True)
+        logger.error(f"Connection error while fetching from {url}")
         raise
     except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error while fetching from {url}", exc_info=True)
+        logger.error(f"HTTP error while fetching from {url}")
         raise
     except Exception:
-        logger.error(f"Unexpected error while fetching from {url}", exc_info=True)
+        logger.error(f"Unexpected error while fetching from {url}")
         raise
     else:
         if soup is not None:
@@ -163,20 +163,16 @@ def search_place_id(place_name: str) -> None | str:
     try:
         response = requests.get(base_url, params=params, timeout=120)
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout while fetching from {place_name}", exc_info=True)
+        logger.error(f"Timeout while fetching from {place_name}")
         raise
     except requests.exceptions.ConnectionError:
-        logger.error(
-            f"Connection error while fetching from {place_name}", exc_info=True
-        )
+        logger.error(f"Connection error while fetching from {place_name}")
         raise
     except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error while fetching from {place_name}", exc_info=True)
+        logger.error(f"HTTP error while fetching from {place_name}")
         raise
     except Exception:
-        logger.error(
-            f"Unexpected error while fetching from {place_name}", exc_info=True
-        )
+        logger.error(f"Unexpected error while fetching from {place_name}")
         raise
     else:
         data = response.json()
@@ -208,16 +204,16 @@ def get_place_details(place_id: str) -> dict | None:
     try:
         response = requests.get(base_url, params=params, timeout=120)
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout while fetching from {place_id}", exc_info=True)
+        logger.error(f"Timeout while fetching from {place_id}")
         raise
     except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error while fetching from {place_id}", exc_info=True)
+        logger.error(f"Connection error while fetching from {place_id}")
         raise
     except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error while fetching from {place_id}", exc_info=True)
+        logger.error(f"HTTP error while fetching from {place_id}")
         raise
     except Exception:
-        logger.error(f"Unexpected error while fetching from {place_id}", exc_info=True)
+        logger.error(f"Unexpected error while fetching from {place_id}")
         raise
     else:
         return response.json()
@@ -281,7 +277,7 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
             # 將字典 dict 型別的資料，寫入本機json檔案。
             json.dump(all_details_json, f, ensure_ascii=False, indent=4)
     except Exception:
-        logger.error("Error on writing into JSON file.", exc_info=True)
+        logger.error("Error on writing into JSON file.")
         raise
     else:
         logger.info(
