@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from src.util.get_table_from_sql_server import get_table_from_sqlserver
+from src.util.mysql_utils import get_table_from_sqlserver
 
 # 解決欄位顯示不完整問題: 確保能清楚看到所有欄位
 pd.set_option("display.max_columns", None)

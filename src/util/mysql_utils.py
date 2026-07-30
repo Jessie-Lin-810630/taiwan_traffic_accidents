@@ -22,8 +22,17 @@ username = os.getenv("MYSQL_USER")
 password = os.getenv("MYSQL_PASSWORD")
 
 
-def create_engine_to_mysql(database: str | None = None) -> Engine:
-    """Create a SQLAlchemy engine to connect to a MySQL database.
+# 以資料庫名為鍵的模組層 Engine 快取（ADR-0004）：
+# 每個 Engine 攜帶一個連線池，若每次呼叫都新建，池永遠不會服務第二個請求，
+# pool_size / pool_recycle / pool_pre_ping 三個設定形同虛設。
+_ENGINES: dict[str | None, Engine] = {}
+
+
+def _create_engine(database: str | None = None) -> Engine:
+    """建立一個連往 MySQL 的 SQLAlchemy Engine。
+
+    僅供 `get_engine_to_mysql()` 在快取未命中時呼叫。
+    外部請一律使用 `get_engine_to_mysql()`，以免繞過快取。
 
     Parameters:
         database (str | None): The name of the database to connect to.
@@ -46,6 +55,46 @@ def create_engine_to_mysql(database: str | None = None) -> Engine:
         connect_args={"connect_timeout": 120},
     )
     return engine
+
+
+def get_engine_to_mysql(database: str | None = None) -> Engine:
+    """取得連往指定資料庫的 SQLAlchemy Engine，同一資料庫在行程內共用同一個。
+
+    Engine 內含連線池，生命週期與行程等長，因此不需要（也不應該）由呼叫端
+    `dispose()`。未命中快取時才會真的建立，日誌因此可直接證明池只建立一次。
+
+    Parameters:
+        database (str | None): The name of the database to connect to.
+            `None` 代表不指定資料庫（例如建立資料庫本身時）。
+
+    Returns:
+        Engine: A SQLAlchemy Engine instance connected to the specified MySQL database.
+    """
+    if database not in _ENGINES:
+        logger.info(f"==== Creating SQLAlchemy Engine for database `{database}` ====")
+        _ENGINES[database] = _create_engine(database)
+    return _ENGINES[database]
+
+
+def get_table_from_sqlserver(
+    dql_str: str, params: dict | None = None, *, database: str | None = None
+) -> pd.DataFrame:
+    """以 DQL 查詢 MySQL 資料表並回傳 DataFrame。
+
+    Parameters:
+        dql_str (str): 要執行的 DQL（SELECT）敘述。
+        params (dict | None): 綁定至敘述中具名佔位符的參數。
+        database (str | None): 資料表所在的資料庫名稱。
+
+    Returns:
+        pandas.DataFrame: 查詢結果；欄位名取自查詢回傳的欄位。
+    """
+    engine = get_engine_to_mysql(database)
+
+    with engine.connect() as conn:
+        result = conn.execute(text(str(dql_str)), parameters=params)
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+    return df
 
 
 def get_pymysql_conn_to_mysql(database: str | None) -> Connection:
@@ -195,9 +244,6 @@ def create_database(engine: Engine, database_name: str) -> None:
         )
         raise
 
-    finally:
-        engine.dispose()
-
 
 def create_tables(engine: Engine, tables: dict[str, str]) -> None:
     """依傳入的 DDL 建立資料表；已存在的資料表會被跳過。
@@ -235,9 +281,6 @@ def create_tables(engine: Engine, tables: dict[str, str]) -> None:
     except Exception:
         logger.error("Unexpected error occurred during table creation.")
         raise
-
-    finally:
-        engine.dispose()
 
 
 def upsert_to_table(

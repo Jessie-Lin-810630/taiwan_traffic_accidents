@@ -57,7 +57,7 @@ def test_已存在的表被跳過且不執行_ddl():
         create_tables(engine, {"dim_accident_day": "CREATE TABLE ..."})
 
     conn.execute.assert_not_called()
-    engine.dispose.assert_called_once()
+    engine.dispose.assert_not_called()
 
 
 def test_不存在的表才執行_ddl():
@@ -68,11 +68,11 @@ def test_不存在的表才執行_ddl():
         create_tables(engine, {"dim_accident_day": "CREATE TABLE ..."})
 
     conn.execute.assert_called_once()
-    engine.dispose.assert_called_once()
+    engine.dispose.assert_not_called()
 
 
-def test_ddl_失敗時原樣拋出並釋放_engine():
-    """依 ADR-0001 不轉換例外型別；engine 仍須在 finally 釋放。"""
+def test_ddl_失敗時原樣拋出且不關閉共用_engine():
+    """依 ADR-0001 不轉換例外型別；依 ADR-0004，共用 Engine 不由呼叫端關閉。"""
     engine, conn = _fake_engine()
     conn.execute.side_effect = SQLAlchemyError("syntax error")
 
@@ -80,7 +80,7 @@ def test_ddl_失敗時原樣拋出並釋放_engine():
         with pytest.raises(SQLAlchemyError):
             create_tables(engine, {"dim_accident_day": "CREATE TABLE ..."})
 
-    engine.dispose.assert_called_once()
+    engine.dispose.assert_not_called()
 
 
 def test_建表任務把自己的宣告轉交給_create_tables():

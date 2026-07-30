@@ -3,8 +3,8 @@
 import numpy as np
 import pandas as pd
 
-from src.util.get_table_from_sql_server import get_table_from_sqlserver
 from src.util.logger_crtx import get_logger
+from src.util.mysql_utils import get_table_from_sqlserver
 from src.util.table_column_map import fact_accident_main_col_origin_map
 
 logger = get_logger(__name__)

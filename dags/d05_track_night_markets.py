@@ -17,7 +17,7 @@ from src.task.t_fact_night_markets import (
     read_googlemap_responsed_json,
     t_fact_night_markets,
 )
-from src.util.mysql_utils import create_engine_to_mysql
+from src.util.mysql_utils import get_engine_to_mysql
 
 # Default arguments for the DAG
 default_args = {
@@ -49,7 +49,7 @@ def night_markets_pipeline():
         execution_timeout=timedelta(minutes=10),
     )
     def task_crx_nm_table(database):
-        engine = create_engine_to_mysql(database)
+        engine = get_engine_to_mysql(database)
         create_night_market_tables(engine)
         return None
 

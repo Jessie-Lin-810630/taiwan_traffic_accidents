@@ -11,7 +11,7 @@ from src.task.t_dim_accident_day import (
     t_data_for_dim_accident_day,
     taiwan_national_activities,
 )
-from src.util.mysql_utils import create_database, create_engine_to_mysql
+from src.util.mysql_utils import create_database, get_engine_to_mysql
 
 # Default arguments for the DAG
 default_args = {
@@ -39,7 +39,7 @@ def calendar_pipeline():
 
     @task
     def task_crx_database_and_table(database):
-        engine = create_engine_to_mysql(database)
+        engine = get_engine_to_mysql(database)
         create_database(engine, database)
         create_traffic_accident_tables(engine)
         return None
