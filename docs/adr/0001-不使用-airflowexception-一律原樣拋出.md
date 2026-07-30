@@ -23,7 +23,13 @@ except SQLAlchemyError as e:
 
 ## 決策
 
-**不再依執行環境切換例外型別。所有失敗一律 `logger.error(..., exc_info=True)` 後 `raise`。**
+**不再依執行環境切換例外型別。所有失敗一律 `logger.error(...)` 後 `raise`。**
+
+> **2026-07-30 修訂**：`exc_info=True` 的使用時機已由
+> [ADR-0003 子決策 5](./0003-快取層不再吞噬例外.md) 收斂為
+> 「只在例外停止傳播之處使用」——
+> 有 `raise` 就不帶 `exc_info`，避免同一個錯誤在多層各印一份 traceback。
+> 本 ADR 的核心決策（不轉換例外型別）不變。
 
 `logger_crtx` 隨之收斂為單一函式 `get_logger(name)`，不再偵測 Airflow、
 不再回傳例外類別。`src/util/` 底下再也沒有任何模組知道 Airflow 存在。
