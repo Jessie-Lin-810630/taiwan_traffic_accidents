@@ -98,6 +98,9 @@ def analysis_pedestrian_accidents():
 
                 # # 開始執行
                 # exec_sql_linebyline(list_of_sql_statements)
+
+            # 連線為 autocommit=False，必須明確提交。
+            conn.commit()
             logger.info("全數sql file解析且執行完成!")
         except Exception:
             logger.error(f"處理 sql file 失敗: {file_path}", exc_info=True)
