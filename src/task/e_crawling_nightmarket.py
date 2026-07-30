@@ -46,12 +46,15 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
     (north, south, west, east, outlying islands).
     :type cities_per_region: dict
 
-    :returns: String of the path of generated csv file.
+    :returns: String of the path of generated csv file. 回傳值代表該檔案確實已寫出
+    且含有夜市資料；任何失敗都會拋出例外而非回傳路徑（ADR-0005）。
     :rtype: str
+
+    :raises requests.exceptions.RequestException: 抓取失敗或回應非 2xx。
+    :raises ValueError: 頁面解析不到任何夜市。
     """
     # 變數宣告
     response = None
-    soup = None
 
     # 定義存檔路徑，並確保資料夾存在
     curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
@@ -62,9 +65,10 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
 
     try:
         response = requests.get(url, headers=headers, timeout=120)
-        if response.status_code == 200:
-            logger.info(f"====成功訪問{url}====")
-            soup = BeautifulSoup(response.text, "html.parser")
+        # 非 2xx 直接轉成 HTTPError，交由下方的 except 分類後原樣拋出（ADR-0005）。
+        response.raise_for_status()
+        logger.info(f"====成功訪問{url}====")
+        soup = BeautifulSoup(response.text, "html.parser")
 
     except requests.exceptions.Timeout:
         logger.error(f"Timeout while fetching from {url}")
@@ -79,59 +83,55 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
         logger.error(f"Unexpected error while fetching from {url}")
         raise
     else:
-        if soup is not None:
-            regionlst = []
-            citylst = []
-            nm_namelst = []
-            nm_addresslst = []
-            city_name = soup.find_all("h3")  # 基隆市、臺北市、......、連江縣
-            # print(len(city_name)) # 22個縣市
-            tables = soup.find_all("table", class_="wikitable")
-            # print(len(tables)) # 22個表格
-            for i in range(len(tables)):
-                table = tables[i]
-                rows = table.find_all("tr")
-                for row in rows[1:]:  # r = 一處夜市、row[1:]代表跳過表格標題列
-                    tds = row.find_all("td")  # tds = 表格所有欄位
+        regionlst = []
+        citylst = []
+        nm_namelst = []
+        nm_addresslst = []
+        city_name = soup.find_all("h3")  # 基隆市、臺北市、......、連江縣
+        # print(len(city_name)) # 22個縣市
+        tables = soup.find_all("table", class_="wikitable")
+        # print(len(tables)) # 22個表格
+        for i in range(len(tables)):
+            table = tables[i]
+            rows = table.find_all("tr")
+            for row in rows[1:]:  # r = 一處夜市、row[1:]代表跳過表格標題列
+                tds = row.find_all("td")  # tds = 表格所有欄位
 
-                    # 取得夜市名稱
-                    nightmarket_name = tds[0].text.strip()
-                    if (
-                        "夜市" not in nightmarket_name
-                        and "商圈" not in nightmarket_name
-                    ):
-                        continue
+                # 取得夜市名稱
+                nightmarket_name = tds[0].text.strip()
+                if "夜市" not in nightmarket_name and "商圈" not in nightmarket_name:
+                    continue
 
-                    # 合法夜市名稱才能列入清單
-                    nm_namelst.append(nightmarket_name)
+                # 合法夜市名稱才能列入清單
+                nm_namelst.append(nightmarket_name)
 
-                    # 取得夜市所屬街道地址
-                    nightmarket_address = tds[1].text.strip()
-                    nm_addresslst.append(nightmarket_address)
+                # 取得夜市所屬街道地址
+                nightmarket_address = tds[1].text.strip()
+                nm_addresslst.append(nightmarket_address)
 
-                    # 補上所屬縣市
-                    citylst.append(city_name[i].text.strip())
+                # 補上所屬縣市
+                citylst.append(city_name[i].text.strip())
 
-                    # 補上縣市所屬分區(北、中、南、....)
-                    for region, cities in cities_per_region.items():
-                        if city_name[i].text.strip() in cities:
-                            regionlst.append(region)
+                # 補上縣市所屬分區(北、中、南、....)
+                for region, cities in cities_per_region.items():
+                    if city_name[i].text.strip() in cities:
+                        regionlst.append(region)
 
-            # 裝成DataFrame
-            df = pd.DataFrame(
-                {
-                    "Region": regionlst,
-                    "City": citylst,
-                    "Night_market_name": nm_namelst,
-                    "Night_market_address": nm_addresslst,
-                }
-            )
-            if df.empty:
-                logger.info(f"{csvfile_name}為空的dataframe，請檢查爬蟲程式")
+        # 裝成DataFrame
+        df = pd.DataFrame(
+            {
+                "Region": regionlst,
+                "City": citylst,
+                "Night_market_name": nm_namelst,
+                "Night_market_address": nm_addresslst,
+            }
+        )
+        # 解析不到任何夜市代表頁面結構已變，不可產出空 CSV 讓下游繼續（ADR-0005）。
+        if df.empty:
+            raise ValueError(f"自 {url} 解析不到任何夜市，請檢查爬蟲程式")
 
-            df.to_csv(csvfile_name, sep=",", encoding="utf-8-sig")
-            logger.info(f"====Save the file successfully! {csvfile_name}====")
-    finally:
+        df.to_csv(csvfile_name, sep=",", encoding="utf-8-sig")
+        logger.info(f"====Save the file successfully! {csvfile_name}====")
         return str(csvfile_name)
 
 
