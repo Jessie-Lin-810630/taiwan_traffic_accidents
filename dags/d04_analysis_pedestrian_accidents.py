@@ -6,10 +6,7 @@ from pathlib import Path
 
 from airflow.sdk import dag, task
 
-from src.util.logger_crtx import get_logger
-from src.util.mysql_utils import get_pymysql_conn_to_mysql_multistatement
-
-logger = get_logger(__name__)
+from src.task.exec_mart_sql import exec_mart_sql_files, find_sql_files
 
 # Default arguments for the DAG
 default_args = {
@@ -35,83 +32,19 @@ def analysis_pedestrian_accidents():
     """蒐集 mart 層 SQL 檔案後依序執行，重建分析用資料表。"""
 
     @task
-    def find_sql_files(sql_files_dir: str | Path) -> list[str]:
-        if isinstance(sql_files_dir, str):
-            sql_files_dir = Path(sql_files_dir)
+    def task_find_sql_files(sql_files_dir):
+        return find_sql_files(sql_files_dir)
 
-        sql_file_paths = [str(f) for f in sql_files_dir.rglob("*.sql")]
-        if not sql_file_paths:
-            raise FileNotFoundError(
-                f".sql files not found in the directory {sql_files_dir}!"
-            )
-        return sql_file_paths
-
-    def exec_sql_linebyline(sql_str: str, database: str) -> None:
-        try:
-            conn = get_pymysql_conn_to_mysql_multistatement(database)
-            cursor = conn.cursor()
-            logger.info(f"type of sql_str: {type(sql_str)}")
-            cursor.execute(sql_str)
-        except Exception:
-            logger.error("SQL執行失敗")
-            if conn:
-                conn.rollback()
-            raise
-        else:
-            logger.info("Mart層資料表建立成功!")
-        finally:
-            cursor.close()
-            conn.close()
-            return None
-
-    @task()
-    def read_sql(sql_file_paths: list[str]) -> list[str]:
-        database = os.getenv("MYSQL_DATABASE")
-        conn = get_pymysql_conn_to_mysql_multistatement(database)
-        cursor = conn.cursor()
-        file_path = None  # 供 except 區塊指出失敗的檔案，避免引用未綁定的迴圈變數
-        try:
-            for i in range(len(sql_file_paths)):
-                file_path = sql_file_paths[i]
-                logger.info(f"正在處理第{i + 1}份: {os.path.basename(file_path)}")
-                with open(file_path, mode="r") as f:
-                    sql_content = f.read()
-                cursor.execute(sql_content)
-
-                # 有可能資料庫可能還沒真正完成報錯，但Python認為已經跑完了而提前印出"建立成功"。
-                # 這裡要強制用python檢查所有result sets都有消耗掉，才可以離開while loop進入下一行。
-                while conn.next_result():
-                    pass
-                logger.info("Mart層資料表建立成功!")
-                # # 使用 sqlparse 移除註解並格式化
-                # clean_sql = sqlparse.format(sql_content, strip_comments=True)
-
-                # # 分割成語句列表（sqlparse會自動處理分號）
-                # list_of_sql_statements = sqlparse.split(clean_sql)
-
-                # # 移除空語句
-                # list_of_sql_statements = [stmt.strip() for stmt in list_of_sql_statements
-                #                           if stmt.strip()]
-                # print(f"去除註解後、清理SQL語句數量: {len(list_of_sql_statements)}")
-
-                # # 開始執行
-                # exec_sql_linebyline(list_of_sql_statements)
-
-            # 連線為 autocommit=False，必須明確提交。
-            conn.commit()
-            logger.info("全數sql file解析且執行完成!")
-        except Exception:
-            logger.error(f"處理 sql file 失敗: {file_path}")
-            if conn:
-                conn.rollback()
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+    @task
+    def task_exec_mart_sql_files(sql_file_paths, database):
+        exec_mart_sql_files(sql_file_paths, database)
         return None
 
-    sql_file_path_lst = find_sql_files(Path().resolve() / "src/task/mart_table_sql")
-    read_sql(sql_file_path_lst)
+    database = os.getenv("MYSQL_DATABASE")
+    sql_file_path_lst = task_find_sql_files(
+        Path().resolve() / "src/task/mart_table_sql"
+    )
+    task_exec_mart_sql_files(sql_file_path_lst, database)
 
 
 analysis_pedestrian_accidents()

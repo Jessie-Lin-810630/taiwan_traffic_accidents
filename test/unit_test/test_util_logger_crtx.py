@@ -66,7 +66,8 @@ def test_所有_etl_模組在無_airflow_的環境可匯入():
     """ETL 模組不得於匯入期依賴 airflow，否則地端與 pytest 無法載入。"""
     module_names = _task_module_names()
 
-    assert len(module_names) == 20
+    # 20 支原有 ETL 模組 + exec_mart_sql（ADR-0005 自 dags/d04 搬出）
+    assert len(module_names) == 21
     for module_name in module_names:
         assert importlib.import_module(module_name) is not None
 
