@@ -1,34 +1,41 @@
-from dotenv import load_dotenv
-import os
+"""Extract 階段：爬取全臺夜市清單，並向 Google Maps API 取得地理資訊。"""
+
 import json
+import os
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from pathlib import Path
-import pandas as pd
-from datetime import datetime
-from airflow.models import Variable
-from airflow.exceptions import AirflowException
+from dotenv import load_dotenv
+
+from src.util.logger_crtx import get_logger
+
+logger = get_logger(__name__)
 
 # 指定要爬取的網址
 night_markets_wiki_url = "https://zh.wikipedia.org/zh-tw/%E8%87%BA%E7%81%A3%E5%A4%9C%E5%B8%82%E5%88%97%E8%A1%A8"
 
 # 準備headers
-headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
-           " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"}
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+    " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+}
 
 cities_per_region = {
     "北部": ["臺北市", "新北市", "基隆市", "桃園市", "新竹市", "新竹縣"],
     "中部": ["臺中市", "彰化縣", "南投縣", "雲林縣", "苗栗縣"],
     "南部": ["臺南市", "高雄市", "屏東縣", "嘉義市", "嘉義縣"],
     "東部": ["花蓮縣", "臺東縣", "宜蘭縣"],
-    "離島": ["澎湖縣", "金門縣", "連江縣"]
+    "離島": ["澎湖縣", "金門縣", "連江縣"],
 }
 
 
 def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict) -> str:
-    """
-    Request the url Wikipedia to get the list of night markets in Taiwan. 
-    The obtained list will be saved in a new csv file of which the file path is 
+    """Request the url Wikipedia to get the list of night markets in Taiwan.
+
+    The obtained list will be saved in a new csv file of which the file path is
     return value.
 
     :param url: URL of Wikipedia summarizing the night markets in Taiwan.
@@ -42,40 +49,35 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
     :returns: String of the path of generated csv file.
     :rtype: str
     """
-
     # 變數宣告
     response = None
     soup = None
 
     # 定義存檔路徑，並確保資料夾存在
     curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-    raw_data_save_dir = curr_working_dir/"test"/"raw_data"
+    raw_data_save_dir = curr_working_dir / "test" / "raw_data"
     raw_data_save_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
-    csvfile_name = raw_data_save_dir/f"Taiwan_night_markets_list_{today}.csv"
+    csvfile_name = raw_data_save_dir / f"Taiwan_night_markets_list_{today}.csv"
 
     try:
         response = requests.get(url, headers=headers, timeout=120)
         if response.status_code == 200:
-            print(f"====成功訪問{url}====")
+            logger.info(f"====成功訪問{url}====")
             soup = BeautifulSoup(response.text, "html.parser")
 
-    except requests.exceptions.Timeout as e:
-        print(f"Timeout occurred while fetching from {url}, "
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.ConnectionError as e:
-        print(f"Connection error occurred while fetching from {url},"
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP error occurred while fetching from {url},"
-              f"error: {e}")
-        raise AirflowException
-    except Exception as e:
-        print(f"An error occurred while fetching from {url},"
-              f"error: {e}")
-        raise AirflowException
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout while fetching from {url}", exc_info=True)
+        raise
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error while fetching from {url}", exc_info=True)
+        raise
+    except requests.exceptions.HTTPError:
+        logger.error(f"HTTP error while fetching from {url}", exc_info=True)
+        raise
+    except Exception:
+        logger.error(f"Unexpected error while fetching from {url}", exc_info=True)
+        raise
     else:
         if soup is not None:
             regionlst = []
@@ -94,7 +96,10 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
 
                     # 取得夜市名稱
                     nightmarket_name = tds[0].text.strip()
-                    if "夜市" not in nightmarket_name and "商圈" not in nightmarket_name:
+                    if (
+                        "夜市" not in nightmarket_name
+                        and "商圈" not in nightmarket_name
+                    ):
                         continue
 
                     # 合法夜市名稱才能列入清單
@@ -113,15 +118,19 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
                             regionlst.append(region)
 
             # 裝成DataFrame
-            df = pd.DataFrame({"Region": regionlst,
-                               "City": citylst,
-                               "Night_market_name": nm_namelst,
-                               "Night_market_address": nm_addresslst, })
+            df = pd.DataFrame(
+                {
+                    "Region": regionlst,
+                    "City": citylst,
+                    "Night_market_name": nm_namelst,
+                    "Night_market_address": nm_addresslst,
+                }
+            )
             if df.empty:
-                print(f"{csvfile_name}為空的dataframe，請檢查爬蟲程式")
+                logger.info(f"{csvfile_name}為空的dataframe，請檢查爬蟲程式")
 
             df.to_csv(csvfile_name, sep=",", encoding="utf-8-sig")
-            print(f"====Save the file successfully! {csvfile_name}====")
+            logger.info(f"====Save the file successfully! {csvfile_name}====")
     finally:
         return str(csvfile_name)
 
@@ -132,44 +141,43 @@ API_KEY = os.getenv("GOOGLE_MAP_API_KEY")
 
 
 def search_place_id(place_name: str) -> None | str:
-    """
-    Call the GoogleMap Place API to request the place IDs of each
+    """Call the GoogleMap Place API to request the place IDs of each
+
     interested location.
 
     :param place_name: location name or shop name (e.g. night market name)
     :type place_name: str
 
-    :returns: If requests.Exception or not found ID, it will return None. 
+    :returns: If requests.Exception or not found ID, it will return None.
     Otherwise return the place ID.
     :rtype: None or str
     """
-
     base_url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
     params = {
         "input": place_name,
         "inputtype": "textquery",
         "fields": "place_id",
         "language": "zh-TW",
-        "key": API_KEY
+        "key": API_KEY,
     }
     try:
         response = requests.get(base_url, params=params, timeout=120)
-    except requests.exceptions.Timeout as e:
-        print(f"Timeout occurred while fetching from {place_name}, "
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.ConnectionError as e:
-        print(f"Connection error occurred while fetching from {place_name},"
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP error occurred while fetching from {place_name},"
-              f"error: {e}")
-        raise AirflowException
-    except Exception as e:
-        print(f"An error occurred while fetching from {place_name},"
-              f"error: {e}")
-        raise AirflowException
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout while fetching from {place_name}", exc_info=True)
+        raise
+    except requests.exceptions.ConnectionError:
+        logger.error(
+            f"Connection error while fetching from {place_name}", exc_info=True
+        )
+        raise
+    except requests.exceptions.HTTPError:
+        logger.error(f"HTTP error while fetching from {place_name}", exc_info=True)
+        raise
+    except Exception:
+        logger.error(
+            f"Unexpected error while fetching from {place_name}", exc_info=True
+        )
+        raise
     else:
         data = response.json()
         if data.get("candidates"):
@@ -178,51 +186,46 @@ def search_place_id(place_name: str) -> None | str:
 
 
 def get_place_details(place_id: str) -> dict | None:
-    """
-    Use the place ID and call the GoogleMap Place API to get detailed information
+    """Use the place ID and call the GoogleMap Place API to get detailed information
+
     of a location, including name, rating, formatted_address, opening_hours, URL to GoogleMap
     and geometry.
 
     :param place_id: place ID registered in GoogleMap API
     :type place_id: str
 
-    :returns: If requests.Exception or not found details, it will return None. 
+    :returns: If requests.Exception or not found details, it will return None.
     Otherwise, return a python dict object decoded from the json-type response.
     :rtype: dict or None
     """
-
     base_url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
         "place_id": place_id,
         "fields": "name,rating,formatted_address,opening_hours,url,geometry",
         "language": "zh-TW",
-        "key": API_KEY
+        "key": API_KEY,
     }
     try:
         response = requests.get(base_url, params=params, timeout=120)
-    except requests.exceptions.Timeout as e:
-        print(f"Timeout occurred while fetching from {place_id}, "
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.ConnectionError as e:
-        print(f"Connection error occurred while fetching from {place_id},"
-              f"error: {e}")
-        raise AirflowException
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP error occurred while fetching from {place_id},"
-              f"error: {e}")
-        raise AirflowException
-    except Exception as e:
-        print(f"An error occurred while fetching from {place_id},"
-              f"error: {e}")
-        raise AirflowException
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout while fetching from {place_id}", exc_info=True)
+        raise
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error while fetching from {place_id}", exc_info=True)
+        raise
+    except requests.exceptions.HTTPError:
+        logger.error(f"HTTP error while fetching from {place_id}", exc_info=True)
+        raise
+    except Exception:
+        logger.error(f"Unexpected error while fetching from {place_id}", exc_info=True)
+        raise
     else:
         return response.json()
 
 
 def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
-    """
-    Extracting data:
+    """Extracting data:
+
     Open the csv file that containing the night market name.
     With them, call the GoogleMap API by the function get_place_id() and get_place_details()
     to get the place details ot night markets in Taiwan. The place details is saved in new
@@ -231,12 +234,12 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
     :param csvfile_path: csv file path to open.
     :type csvfile_path: str | Path
 
-    :returns: If requests.Exception,no founding ID/details or file I/O exceptioon. 
+    :returns: If requests.Exception,no founding ID/details or file I/O exceptioon.
     Otherwise, the path of generated json file is returned.
     :rtype: str | Path
     """
     if not API_KEY:
-        raise AirflowException("找不到 API 金鑰，請確認 .env 檔")
+        raise ValueError("找不到 API 金鑰，請確認 .env 檔")
 
     # 讀取csv，取得所有夜市名稱
     df_markets = pd.read_csv(Path(csvfile_path), sep=",")
@@ -246,40 +249,44 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
     failure_id_list = []
     failure_detail_list = []
     for name in nm_names:
-        print(f"====正在查詢：{name} 的place ID...====")
+        logger.info(f"====正在查詢：{name} 的place ID...====")
         place_id = search_place_id(name)
         if not place_id:
-            print(f"找不到 {name} 的place ID")
+            logger.info(f"找不到 {name} 的place ID")
             failure_id_list.append(name)
             continue
 
-        print(f"====已取得{name}的place_id，正在進一步查詢地理位置細節...====")
+        logger.info(f"====已取得{name}的place_id，正在進一步查詢地理位置細節...====")
         details = get_place_details(place_id)
 
         if not details:
-            print(f"找不到{name}的地理位置細節")
+            logger.info(f"找不到{name}的地理位置細節")
             failure_detail_list.append(name)
             continue
 
-        print(f"====已取得{name}的地理位置細節====")
+        logger.info(f"====已取得{name}的地理位置細節====")
         all_details_json.append(details)
 
     # 合併儲存所有夜市 details 到同一個json
     # 定義存檔路徑，並確保資料夾存在
     curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-    raw_data_save_dir = curr_working_dir/"test"/"raw_data"
+    raw_data_save_dir = curr_working_dir / "test" / "raw_data"
     raw_data_save_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
-    jsonfile_name = raw_data_save_dir/f"Taiwan_night_markets_from_map_api_{today}.json"
+    jsonfile_name = (
+        raw_data_save_dir / f"Taiwan_night_markets_from_map_api_{today}.json"
+    )
     try:
         with open(jsonfile_name, "w", encoding="utf-8") as f:
             # 將字典 dict 型別的資料，寫入本機json檔案。
             json.dump(all_details_json, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"Error on writing into JSON file. {e}")
-        raise AirflowException
+    except Exception:
+        logger.error("Error on writing into JSON file.", exc_info=True)
+        raise
     else:
-        print(f"全部夜市地理資訊已成功輸出到：{jsonfile_name}，"
-              f"總計找到了: {len(all_details_json)}個夜市資訊。"
-              f"失敗率: {(len(failure_detail_list) + len(failure_id_list))} / {len(nm_names)}")
+        logger.info(
+            f"全部夜市地理資訊已成功輸出到：{jsonfile_name}，"
+            f"總計找到了: {len(all_details_json)}個夜市資訊。"
+            f"失敗率: {(len(failure_detail_list) + len(failure_id_list))} / {len(nm_names)}"
+        )
         return str(jsonfile_name)

@@ -1,17 +1,28 @@
+"""Load 階段：將事故環境事實資料 upsert 進 `fact_accident_env`。"""
+
 import pandas as pd
-from sqlalchemy import text
+
 from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql
-from airflow.models import Variable
-from airflow.exceptions import AirflowException
+from src.util.logger_crtx import get_logger
+
+logger = get_logger(__name__)
 
 
-def l_fact_accident_env(df_fact_accident_env: pd.DataFrame,
-                        database: str | None = None) -> None:
-    """"""
+def l_fact_accident_env(
+    df_fact_accident_env: pd.DataFrame, database: str | None = None
+) -> None:
+    """以 UPSERT 將事故環境事實資料寫入 `fact_accident_env`。
+
+    採用 INSERT ... ON DUPLICATE KEY UPDATE，發生錯誤時復原事務並原樣拋出例外。
+
+    Parameters:
+        df_fact_accident_env (pandas.DataFrame): 待寫入的事故環境事實資料。
+        database (str | None): 目標資料庫名稱。
+    """
     # 準備INSERT資料表時需要的SQL語句，採用UPSERT
     # 先準備INSERT部分
-    columns = ', '.join(df_fact_accident_env.columns)
-    placeholders = ', '.join(['%s'] * len(df_fact_accident_env.columns))
+    columns = ", ".join(df_fact_accident_env.columns)
+    placeholders = ", ".join(["%s"] * len(df_fact_accident_env.columns))
 
     # 準備UPDATE的部分：故意只更新weather_condition。
     update_part = "weather_condition=VALUES(weather_condition)"
@@ -21,9 +32,8 @@ def l_fact_accident_env(df_fact_accident_env: pd.DataFrame,
                   VALUES ({placeholders})
                   ON DUPLICATE KEY UPDATE {update_part};
                 """
-
     # 6. 寫入資料表
-    print(f"====Inserting into table `fact_accident_env`....====")
+    logger.info("====Inserting into table `fact_accident_env`....====")
     conn = None
     cursor = None
     try:
@@ -32,13 +42,13 @@ def l_fact_accident_env(df_fact_accident_env: pd.DataFrame,
             cursor = conn.cursor()
             cursor.executemany(dml_str, df_fact_accident_env.values.tolist())
             conn.commit()
-    except Exception as e:
-        print(f"Error on inserting into table, Error msg: {e}")
+    except Exception:
+        logger.error("Error on inserting into table.", exc_info=True)
         if conn:
             conn.rollback()
-        raise AirflowException
+        raise
     else:
-        print(f"====Successfully inserting into table `fact_accident_env`====")
+        logger.info("====Successfully inserting into table `fact_accident_env`====")
     finally:
         if conn:
             cursor.close()
