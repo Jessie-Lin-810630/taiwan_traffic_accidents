@@ -72,20 +72,32 @@ from src.util.logger_crtx import get_logger
 logger = get_logger(__name__)
 ```
 
-**例外一律 `logger.error(..., exc_info=True)` 後原樣 `raise`，不要轉換成 `AirflowException`** —— 理由見 `docs/adr/0001-不使用-airflowexception-一律原樣拋出.md`。簡述：Airflow 3 中 `AirflowException` 與任何其他例外的失敗／重試語意完全相同，轉換只會遮蔽原始錯誤型別。真的需要「失敗但不重試」時才明確使用 `AirflowFailException`。
+三條規則，各有 ADR 背書：
 
-此 ADR 已套用到 `src/util/` 的新版工具與 `src/task/` 全部 20 個 ETL 模組 —— **這些模組現在都能在無 Airflow 的環境（地端、pytest、Cloud Run）被匯入**，由 `test/unit_test/test_util_logger_crtx.py` 把關。`dags/` 底下仍照常 import airflow，那是它該做的事。
+1. **不要把例外轉換成 `AirflowException`，一律原樣 `raise`** —— `docs/adr/0001-*.md`。Airflow 3 中 `AirflowException` 與任何其他例外的失敗／重試語意完全相同，轉換只會遮蔽原始錯誤型別。真的需要「失敗但不重試」時才明確使用 `AirflowFailException`。
+2. **不要把故障吞成「正常但空」的回傳值** —— `docs/adr/0003-*.md`。回空 `DataFrame`／空 list／`None` 會讓「查無資料」與「服務故障」無法區分，上游監控因此失效。降級是呼叫端（前端）的政策，不是資料服務層的職責。
+3. **`exc_info=True` 只用在例外停止傳播之處** —— `docs/adr/0003-*.md` 子決策 5。判準一句話：**有 `raise` 就不帶 `exc_info`，沒有 `raise` 才帶**。內層重複輸出 traceback 會淹沒真正的邊界。Airflow task 不需自行記錄（例外傳出時 Airflow 自動輸出完整 traceback）；Streamlit 前端則必須記錄，因為 `st.error()` 只給使用者看。
 
-尚未套用：`dags/d04_analysis_pedestrian_accidents.py` 內還有 `raise AirflowException(...)`，以及 `src/util/create_db_engine_or_database.py`（見下節，刻意凍結）。
+ADR-0001 已套用到 `src/util/` 全部工具與 `src/task/` 全部 20 個 ETL 模組 —— **這些模組都能在無 Airflow 的環境（地端、pytest、Cloud Run）被匯入**，由 `test/unit_test/test_util_logger_crtx.py` 把關。`dags/` 底下仍照常 import airflow，那是它該做的事。
 
-### 進行中的 util 重構（重要）
+規則 1 全 codebase 已無例外（`AirflowException` 零出現）。規則 2、3 在 `src/` 內已無殘留，`dags/d04` 仍有 `finally: return` 吞例外的殘留。
 
-`src/util/` 目前有兩套並存的連線工具：
+### 連線工具（`src/util/`）
 
-- **實際被使用的舊版**：`create_db_engine_or_database.py`、`get_or_set_cache_from_redis.py`、`inspect_table_schema.py`。仍用 `print`、`"/opt/airflow" in sys.path` 偵測、`raise Exception` 裸類別。**刻意凍結不動**，待新版接上後三個檔案一次刪除。
-- **尚未被任何檔案 import 的新版**：`mysql_utils.py`、`redis_utils.py`、`crawling_utils.py`。已加上連線池單例、typed exception、socket timeout。
+連線層的重構已完成，`src/util/` 只剩一套工具：
 
-修改連線邏輯前先用 grep 確認要動的是哪一套，別假設新版已生效。新版接上的已知阻礙：`mysql_utils.upsert_to_table()` 與 `create_tables()` 的表名／`update_part` 仍是硬編碼的模板，`crawling_utils.download_and_extract_zip()` 的參數順序與現有呼叫端不相容。
+| 模組 | 職責 |
+| --- | --- |
+| `mysql_utils.py` | MySQL 的**唯一存取面**：Engine 快取、綱要檢查、查詢、upsert |
+| `redis_utils.py` | Redis 連線池單例與 Pickle 快取讀寫 |
+| `crawling_utils.py` | 抓取工具，**尚未接上**（見下） |
+| `logger_crtx.py` | `get_logger(name)` |
+
+**取 MySQL 連線一律用 `get_engine_to_mysql(database)`，不要自己 `create_engine()`，也不要 `dispose()` 它** —— 理由見 `docs/adr/0004-*.md`。Engine 以 `database` 為鍵快取在模組層 `_ENGINES`，生命週期與行程等長；呼叫端關掉它等於丟棄整個連線池。Redis 側對應的是 `redis_utils._REDIS_POOL`（外部走 `create_redis_client()`）。
+
+查詢走 `mysql_utils.get_table_from_sqlserver()`（名字說謊，查的是 MySQL 不是 SQL Server），寫入走 `upsert_to_table()`。`d04` 的 multistatement 與 `upsert_to_table` 內部另走 pymysql 裸連線，那是刻意的 —— 裸連線有明確的 `close()`，不需要池。
+
+已知阻礙：`crawling_utils.download_and_extract_zip()` 的參數順序與現有呼叫端不相容，這是它接上 `e_crawling_traffic_accident.py` 的卡點。`convert_time_zone.py` 與 `validate_csv_encoding.py` 是零呼叫端的孤兒模組，去留未定。
 
 ## 環境變數
 
@@ -111,12 +123,13 @@ Skill 檔案的實體放在 `.agents/skills/`（**納入版控**），`.claude/s
 - 以 `npx skills add <repo> -s <name> -y` 安裝；多個 skill 要重複 `-s`，逗號分隔會被判定為找不到而退回列出清單
 - `skills-lock.json` 記錄來源，可用 `npx skills experimental_install` 還原
 - 已裝的重構分析工具鏈：`improve-codebase-architecture`（入口，`disable-model-invocation: true`，只能由使用者輸入 `/` 觸發）→ 依賴 `codebase-design`、`grilling`、`domain-modeling`；決策定案後接 `request-refactor-plan`
-- 這些 skill 預期讀 `CONTEXT.md`（領域術語表）與 `docs/adr/`（架構決策記錄），本 repo 目前兩者皆無，會在流程中按需建立
+- 這些 skill 預期讀 `CONTEXT.md`（領域術語表）與 `docs/adr/`（架構決策記錄）。`docs/adr/` 已建立且是重構決策的真實來源；`CONTEXT.md` 仍無，因為至今的候選都是技術債而非領域建模問題
+- **每個候選的產出是兩份文件**：`docs/adr/000N-<決策>.md`（決策文，動工前寫）與 `docs/adr/000N-執行摘要-<主題>.md`（執行報告，驗收後寫）。摘要固定七章：病因定義／決策摘要／實際改動／驗證方式／同病因但尚未修復的位置／現況盤點／建議的下一步。**下一輪的候選來自上一輪摘要的第五、七章**，這是流程能接續的關鍵
 - `openspec/` 是另一套獨立的規格工作流（`.claude/commands/opsx*`），與上述 skill 無關
 
 ## 已知狀態
 
-- `test/unit_test/` 的測試原始碼目前不在工作區（僅剩 `__pycache__`），從 pyc 檔名可看出原本每個 `src/task/*.py` 都有對應的 `test_task_*.py`。新增測試時沿用該命名。
+- `test/unit_test/` 現有 52 個測試（`poetry run pytest test/unit_test/`）。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用 `test_util_*.py`，測試函式名用中文並在 docstring 寫出「釘住的是哪個決策」。沒有 CI 測試 gate，推 `main` 前需自行跑過。
 - `src/app.py` 的按鈕指向多個尚未建立的頁面（`v_act1_city_accident.py`、`v_policy_impact.py`、`v_act3_avoid.py`、`v_act6_chat.py` 等），`src/pages/` 目前只有 `v_act1_all_accident.py`，點擊會報錯。
 - `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分。
 - `pyproject.toml` 的 `[tool.poetry] packages = [{include = "src"}]` 是讓 `src.xxx` 絕對匯入能運作的關鍵；容器內則改由 compose 設定的 `PYTHONPATH=/opt/airflow/`（Airflow）與 `PYTHONPATH=/app`（Cloud Run）達成同樣效果。
