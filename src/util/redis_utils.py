@@ -29,7 +29,15 @@ def _get_redis_pool() -> redis.ConnectionPool:
 
     Returns:
         redis.ConnectionPool: Connection Pool to Redis Server
+
+    Raises:
+        ValueError: `REDIS_PASSWORD` 未設定。
     """
+    # 本專案的 Redis 一律以 --requirepass 啟動，沒密碼必定連不上；
+    # 放任 None 往下走的話 redis 只會回 NOAUTH，看不出是設定缺失（ADR-0008）。
+    if not redis_password:
+        raise ValueError("未設定 REDIS_PASSWORD，請檢查環境變數設置")
+
     global _REDIS_POOL
     if _REDIS_POOL is None:
         _REDIS_POOL = redis.ConnectionPool(

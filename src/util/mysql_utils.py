@@ -22,6 +22,22 @@ username = os.getenv("MYSQL_USER")
 password = os.getenv("MYSQL_PASSWORD")
 
 
+def _require_credentials() -> None:
+    """建立連線前確認必填設定存在（ADR-0008）。
+
+    缺設定時若放任 None 往下走，連線字串會變成
+    `mysql+pymysql://None:None@...`，MySQL 回覆的是「認證失敗」——
+    排查方向會被帶往帳號權限，而真正的原因是環境變數少了一行。
+
+    Raises:
+        ValueError: `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
+    """
+    if not username:
+        raise ValueError("未設定 MYSQL_USER，請檢查環境變數設置")
+    if not password:
+        raise ValueError("未設定 MYSQL_PASSWORD，請檢查環境變數設置")
+
+
 def close_quietly(resource, resource_name: str) -> None:
     """關閉資源，並確保關閉失敗不會取代正在傳播的例外（ADR-0005）。
 
@@ -58,6 +74,8 @@ def _create_engine(database: str | None = None) -> Engine:
     Returns:
         Engine: A SQLAlchemy Engine instance connected to the specified MySQL database.
     """
+    _require_credentials()
+
     if database:
         connection_url = f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset=utf8mb4"
     else:
@@ -126,6 +144,8 @@ def get_pymysql_conn_to_mysql(database: str | None) -> Connection:
     Returns:
         Connection: A pymysql Connection instance connected to the specified MySQL database.
     """
+    _require_credentials()
+
     conn = pymysql.connect(
         host=host,
         port=int(port),
@@ -152,6 +172,8 @@ def get_pymysql_conn_to_mysql_multistatement(database: str | None) -> Connection
     Returns:
         Connection: A pymysql Connection instance connected to the specified MySQL database.
     """
+    _require_credentials()
+
     conn = pymysql.connect(
         host=host,
         port=int(port),

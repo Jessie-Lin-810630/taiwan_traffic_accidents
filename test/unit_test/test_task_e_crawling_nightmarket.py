@@ -115,6 +115,12 @@ def _no_sleep():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _fake_api_key(monkeypatch):
+    """提供假金鑰，讓測試不依賴本機的環境設定（ADR-0008）。"""
+    monkeypatch.setattr(e_crawling_nightmarket, "API_KEY", "fake-key")
+
+
 def _api_response(payload: dict):
     response = MagicMock()
     response.json.return_value = payload
@@ -227,7 +233,6 @@ def _markets_csv(tmp_path, names: list[str]) -> str:
 def test_失敗率超過門檻時拋出(tmp_path, monkeypatch):
     """三個夜市有兩個查不到（67% > 50%），代表系統性問題。"""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(e_crawling_nightmarket, "API_KEY", "fake-key")
     csv_path = _markets_csv(tmp_path, ["A夜市", "B夜市", "C夜市"])
 
     with patch.object(
@@ -243,7 +248,6 @@ def test_失敗率超過門檻時拋出(tmp_path, monkeypatch):
 def test_失敗率未超過門檻時正常產出(tmp_path, monkeypatch):
     """四個夜市有一個查不到（25%），屬常態，不該中斷。"""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(e_crawling_nightmarket, "API_KEY", "fake-key")
     csv_path = _markets_csv(tmp_path, ["A夜市", "B夜市", "C夜市", "D夜市"])
 
     with patch.object(
@@ -265,7 +269,6 @@ def test_失敗率未超過門檻時正常產出(tmp_path, monkeypatch):
 def test_全部查不到時拋出(tmp_path, monkeypatch):
     """金鑰失效已由 status 分類攔下；這裡涵蓋的是名稱全面對不上。"""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(e_crawling_nightmarket, "API_KEY", "fake-key")
     csv_path = _markets_csv(tmp_path, ["A夜市", "B夜市"])
 
     with patch.object(e_crawling_nightmarket, "search_place_id", return_value=None):

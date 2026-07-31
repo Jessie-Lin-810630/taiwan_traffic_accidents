@@ -15,6 +15,17 @@ def _clear_engine_cache():
     mysql_utils._ENGINES.clear()
 
 
+@pytest.fixture(autouse=True)
+def _fake_credentials(monkeypatch):
+    """提供假帳密，讓測試不依賴本機的環境設定。
+
+    真正建立連線的行為全部被 mock，這裡只是滿足 `_require_credentials()`
+    的前提（ADR-0008）；驗證邏輯本身由 `test_util_mysql_utils.py` 涵蓋。
+    """
+    monkeypatch.setattr(mysql_utils, "username", "test_user")
+    monkeypatch.setattr(mysql_utils, "password", "test_password")
+
+
 def test_同一資料庫重複呼叫回傳同一個_engine():
     """快取命中時不得重建 Engine —— 這是本 ADR 的核心行為。"""
     first = mysql_utils.get_engine_to_mysql("traffic_accidents")

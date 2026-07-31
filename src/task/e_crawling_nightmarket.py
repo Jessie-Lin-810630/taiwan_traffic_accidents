@@ -145,6 +145,19 @@ API_KEY = os.getenv("GOOGLE_MAP_API_KEY")
 MAX_FAILURE_RATE = 0.5
 
 
+def _require_api_key() -> None:
+    """呼叫 Places API 前確認金鑰存在（ADR-0008）。
+
+    沒有金鑰時 API 會回 REQUEST_DENIED，經 ADR-0006 的分類後訊息會說
+    「金鑰無效」—— 但實際上是根本沒有金鑰，兩者的排查方向不同。
+
+    Raises:
+        ValueError: `GOOGLE_MAP_API_KEY` 未設定。
+    """
+    if not API_KEY:
+        raise ValueError("未設定 GOOGLE_MAP_API_KEY，請檢查環境變數設置")
+
+
 class PlacesAPIError(RuntimeError):
     """Google Places API 以 HTTP 200 回報的失敗。
 
@@ -256,6 +269,8 @@ def search_place_id(place_name: str) -> None | str:
     :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
     """
     # 參考文件: https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place
+    _require_api_key()
+
     base_url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
     params = {
         "input": place_name,
@@ -307,6 +322,8 @@ def get_place_details(place_id: str) -> dict | None:
     :raises PermanentPlacesAPIError: 授權或參數錯誤。
     :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
     """
+    _require_api_key()
+
     base_url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
         "place_id": place_id,
@@ -351,8 +368,7 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
     Otherwise, the path of generated json file is returned.
     :rtype: str | Path
     """
-    if not API_KEY:
-        raise ValueError("找不到 API 金鑰，請確認 .env 檔")
+    _require_api_key()
 
     # 讀取csv，取得所有夜市名稱
     df_markets = pd.read_csv(Path(csvfile_path), sep=",")
