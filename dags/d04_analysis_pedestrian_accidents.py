@@ -2,11 +2,11 @@
 
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from airflow.sdk import dag, task
 
 from src.task.exec_mart_sql import exec_mart_sql_files, find_sql_files
+from src.util.paths import MART_SQL_DIR
 
 # Default arguments for the DAG
 default_args = {
@@ -41,9 +41,7 @@ def analysis_pedestrian_accidents():
         return None
 
     database = os.getenv("MYSQL_DATABASE")
-    sql_file_path_lst = task_find_sql_files(
-        Path().resolve() / "src/task/mart_table_sql"
-    )
+    sql_file_path_lst = task_find_sql_files(MART_SQL_DIR)
     task_exec_mart_sql_files(sql_file_path_lst, database)
 
 

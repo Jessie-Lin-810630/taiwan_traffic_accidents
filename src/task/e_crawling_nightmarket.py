@@ -13,6 +13,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt
 
 from src.util.crawling_utils import RETRY_ATTEMPTS, RETRY_WAIT, is_transient
 from src.util.logger_crtx import get_logger
+from src.util.paths import RAW_DATA_DIR
 
 logger = get_logger(__name__)
 
@@ -58,12 +59,10 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
     # 變數宣告
     response = None
 
-    # 定義存檔路徑，並確保資料夾存在
-    curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-    raw_data_save_dir = curr_working_dir / "test" / "raw_data"
-    raw_data_save_dir.mkdir(parents=True, exist_ok=True)
+    # 定義存檔路徑，並確保資料夾存在（路徑基準見 ADR-0007）
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
-    csvfile_name = raw_data_save_dir / f"Taiwan_night_markets_list_{today}.csv"
+    csvfile_name = RAW_DATA_DIR / f"Taiwan_night_markets_list_{today}.csv"
 
     try:
         response = requests.get(url, headers=headers, timeout=120)
@@ -391,14 +390,10 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
         )
 
     # 合併儲存所有夜市 details 到同一個json
-    # 定義存檔路徑，並確保資料夾存在
-    curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-    raw_data_save_dir = curr_working_dir / "test" / "raw_data"
-    raw_data_save_dir.mkdir(parents=True, exist_ok=True)
+    # 定義存檔路徑，並確保資料夾存在（路徑基準見 ADR-0007）
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
-    jsonfile_name = (
-        raw_data_save_dir / f"Taiwan_night_markets_from_map_api_{today}.json"
-    )
+    jsonfile_name = RAW_DATA_DIR / f"Taiwan_night_markets_from_map_api_{today}.json"
     try:
         with open(jsonfile_name, "w", encoding="utf-8") as f:
             # 將字典 dict 型別的資料，寫入本機json檔案。

@@ -43,6 +43,9 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./src:/opt/airflow/src
+    # ETL 抓回的原始檔與處理後的 CSV（ADR-0007）。
+    # 不掛載的話會寫進容器可寫層，docker compose up --build 之後就消失。
+    - ./data:/opt/airflow/data
   networks:
     - backend_net
   restart: always

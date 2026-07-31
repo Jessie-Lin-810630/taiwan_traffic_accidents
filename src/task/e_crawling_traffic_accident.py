@@ -16,6 +16,7 @@ from src.util.crawling_utils import (
     fetch_soup,
 )
 from src.util.logger_crtx import get_logger
+from src.util.paths import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 logger = get_logger(__name__)
 
@@ -100,13 +101,13 @@ def _is_accident_csv(filename: str) -> bool:
 
 
 def _prepare_save_dirs() -> tuple[Path, Path]:
-    """建立並回傳 (raw_data, processed_data) 兩個存檔資料夾。"""
-    curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-    raw_data_save_dir = curr_working_dir / "test" / "raw_data"
-    processed_data_save_dir = curr_working_dir / "test" / "processed_data"
-    raw_data_save_dir.mkdir(parents=True, exist_ok=True)
-    processed_data_save_dir.mkdir(parents=True, exist_ok=True)
-    return raw_data_save_dir, processed_data_save_dir
+    """建立並回傳 (raw, processed) 兩個存檔資料夾。
+
+    路徑以專案根為基準（ADR-0007），不隨行程的工作目錄漂移。
+    """
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 
 def _timestamped_name(page_topic: str, suffix: str) -> str:

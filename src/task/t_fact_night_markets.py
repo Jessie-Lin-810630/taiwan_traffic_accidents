@@ -2,7 +2,6 @@
 
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -12,12 +11,6 @@ from src.task.l_fact_night_markets import l_fact_night_markets
 from src.util.logger_crtx import get_logger
 
 logger = get_logger(__name__)
-
-# 找到讀檔路徑
-curr_working_dir = Path().resolve()  # 取得專案根目錄的絕對路徑
-raw_data_save_dir = curr_working_dir / "test" / "raw_data"
-today = datetime.now().date()
-jsonfile_path = raw_data_save_dir / f"Taiwan_night_markets_from_map_api_{today}.json"
 
 
 def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int]:
