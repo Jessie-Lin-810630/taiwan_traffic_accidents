@@ -1,156 +1,148 @@
 """爬蟲共用工具：蒐集下載連結、下載檔案與解壓縮。"""
 
-import re
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
-import urllib3
 from bs4 import BeautifulSoup
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.util.logger_crtx import get_logger
 
 logger = get_logger(__name__)
 
-# 只停用 InsecureRequestWarning，避免每次呼叫 download_csv() 都噴一次警告到 stderr 導致 log 落落長，
-# 但也不用 disable_warnings() 全關（會遮蔽其他種類的安全警告）。
-# 改用 logger.warning 在模組載入時印出一次，確保行為可追蹤。
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-logger.warning(
-    "SSL certificate verification is disabled (verify=False). "
-    "Only use this for trusted internal endpoints."
+# 暫時性故障的重試設定（ADR-0006）：這裡若重試耗盡，將再往上由 Airflow task-level 的 retries 接手。
+RETRY_ATTEMPTS = 3
+RETRY_WAIT = wait_exponential(multiplier=2, max=10)
+
+TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+
+def is_transient(exc: BaseException) -> bool:
+    """判斷例外是否為值得重試的暫時性故障（ADR-0006）。
+
+    公開給呼叫端組合用：有額外重試條件的模組（例如 Google API 在 HTTP 200
+    的回應 body 裡回報失敗）可以把它併進自己的判斷式，而不必疊第二層裝飾器。
+    """
+    if isinstance(
+        exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+    ):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = exc.response
+        return response is not None and response.status_code in TRANSIENT_STATUS_CODES
+    return False
+
+
+def _log_attempt_failure(message: str, exc: BaseException) -> None:
+    """記錄一次請求失敗，級別依「是否還會被重試」而定（ADR-0006）。
+
+    本模組的函式都在 `@retry_on_transient` 之下，暫時性故障的每一次失敗
+    都可能自癒，用 ERROR 記錄會讓一次最終失敗在監控上放大成三筆告警。
+    永久性故障不會重試，那一筆就是確定的失敗，維持 ERROR。
+
+    最終失敗的完整 traceback 由呼叫端負責 —— DAG 路徑上由 Airflow 自動輸出
+    （ADR-0003 子決策 5）。
+    """
+    if is_transient(exc):
+        logger.warning(f"{message}（暫時性故障，將視情況重試）")
+    else:
+        logger.error(message)
+
+
+def _log_retry(retry_state) -> None:
+    """在每次重試前留下記錄，讓「重試過幾次」在 log 裡可追。"""
+    logger.warning(
+        f"第 {retry_state.attempt_number} 次嘗試失敗，"
+        f"{retry_state.next_action.sleep:.0f} 秒後重試："
+        f"{retry_state.outcome.exception()}"
+    )
+
+
+# 供 requests 呼叫端共用的重試裝飾器：只重試暫時性故障，永久性故障立即拋出。
+retry_on_transient = retry(
+    retry=retry_if_exception(is_transient),
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=RETRY_WAIT,
+    before_sleep=_log_retry,
+    reraise=True,  # 重試耗盡時拋出原始例外，而非 tenacity 的 RetryError
 )
 
 
-def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
-    """從指定的 url 清單中尋找、蒐集下載連結。
+@retry_on_transient
+def fetch_soup(url: str, headers: dict, *, verify: bool = True) -> BeautifulSoup:
+    """抓取單一頁面並解析為 BeautifulSoup；暫時性故障會自動重試。
+
+    重試的單位刻意是**單一請求**而非整個 url 清單 ——
+    第三個頁面 503 時不該讓前兩個已成功的頁面重抓。
+    要走訪多個結構相似的頁面時，在呼叫端寫迴圈即可，每頁各自重試：
+
+    ```python
+    results = {}
+    for url in urls:
+        soup = fetch_soup(url, headers)
+        results[url] = soup.select_one("你的選擇器")   # 各站專屬的解析邏輯
+    ```
+
+    解析規則因站而異，屬於呼叫端（`src/task/e_*.py`）的職責；
+    本函式只負責「把一頁安全地抓回來」。
 
     Parameters:
-        urls (list[str]): 要爬取的網頁URL列表。
-        headers (dict): 請求headers。
+        url (str): 要抓取的網頁 URL。
+        headers (dict): 請求 headers。
+        verify (bool): 是否驗證 SSL 憑證，預設 `True`。
+            僅在來源站台的憑證鏈確實有問題時才由呼叫端傳入 `False`，
+            並由該呼叫端自行記錄警告（ADR-0006 子決策 6）。
+
     Returns:
-        dict[str, str]: 包含下載連結和年份標題的字典。
+        BeautifulSoup: 解析後的頁面。
+
+    Raises:
+        requests.exceptions.HTTPError: 回應非 2xx；5xx 與 429 會先重試。
+        requests.exceptions.Timeout | ConnectionError: 重試耗盡後原樣拋出。
     """
-    download_links = {}
-    for url in urls:
-        soup = None
-        try:
-            logger.info(f"開始發送請求至: {url}")
-            response = requests.get(url, headers=headers, verify=False, timeout=30)
+    try:
+        logger.info(f"開始發送請求至: {url}")
+        response = requests.get(url, headers=headers, verify=verify, timeout=30)
 
-            # 確保 HTTP 狀態碼為 200，否則主動拋出 HTTPError 進入 except 區塊
-            response.raise_for_status()
-            logger.info(f"成功訪問 {url}，狀態碼: {response.status_code}")
-            soup = BeautifulSoup(response.text, "html.parser")
+        # 確保 HTTP 狀態碼為 200，否則主動拋出 HTTPError 進入 except 區塊
+        response.raise_for_status()
+        logger.info(f"成功訪問 {url}，狀態碼: {response.status_code}")
+        return BeautifulSoup(response.text, "html.parser")
 
-        except requests.exceptions.Timeout:
-            logger.error(f"請求超時 (Timeout) -> URL: {url}")
-            raise
+    except requests.exceptions.Timeout as exc:
+        _log_attempt_failure(f"請求超時 (Timeout) -> URL: {url}", exc)
+        raise
 
-        except requests.exceptions.ConnectionError:
-            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}")
-            raise
+    except requests.exceptions.ConnectionError as exc:
+        _log_attempt_failure(f"連線失敗 (ConnectionError) -> URL: {url}", exc)
+        raise
 
-        except requests.exceptions.HTTPError:
-            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}")
-            raise
+    except requests.exceptions.HTTPError as exc:  # 429 與 5xx 會被重試，其餘不會
+        _log_attempt_failure(f"HTTP 回應異常 (HTTPError) -> URL: {url}", exc)
+        raise
 
-        except Exception:
-            logger.error(f"未預期的錯誤 -> URL: {url}")
-            raise
-
-        else:
-            if soup is not None:
-                page_topic = None
-                selector = (
-                    "#__nuxt > div > div > main > div.page > "
-                    "div.table.table--fixed.od-table.od-table--bordered.print-table > "
-                    "div:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li > span"
-                )
-                if soup.select_one(selector):
-                    page_topic = (
-                        soup.select_one(selector).text.strip().replace(".zip", "")
-                    )
-                for a_tag in soup.find_all("a", title=re.compile("下載檔案")):
-                    href = a_tag.get("href")
-                    available_file_type = (
-                        a_tag.get("title").replace("下載檔案", "").strip()
-                    )
-                    if href:
-                        logger.info(f"成功找到下載連結: {href}")
-                        download_links[href] = (available_file_type, page_topic)
-
-    return download_links
+    except Exception:
+        logger.error(f"未預期的錯誤 -> URL: {url}")
+        raise
 
 
-def iterate_crawling_similar_urls(urls: list[str], headers: dict) -> dict:
-    """從多個 html 結構相似的 urls 清單，變歷每個 url，做重複爬蟲。
-
-    Parameters:
-        urls (list[str]): 要爬取的網頁URL列表。
-        headers (dict): 請求headers。
-    Returns:
-        dict: 使用 dict 存放各 url 爬取的結果。
-    """
-    result = {}
-    for url in urls:
-        soup = None
-        try:
-            logger.info(f"開始發送請求至: {url}")
-            response = requests.get(url, headers=headers, verify=False, timeout=30)
-
-            # 確保 HTTP 狀態碼為 2xx，否則主動拋出 HTTPError 進入 except 區塊
-            response.raise_for_status()
-            logger.info(f"成功訪問 {url}，狀態碼: {response.status_code}")
-            soup = BeautifulSoup(response.text, "html.parser")
-
-        except requests.exceptions.Timeout:
-            logger.error(f"請求超時 (Timeout) -> URL: {url}")
-            raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
-
-        except requests.exceptions.ConnectionError:
-            logger.error(f"連線失敗 (ConnectionError) -> URL: {url}")
-            raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
-
-        except requests.exceptions.HTTPError:
-            logger.error(f"HTTP 回應異常 (HTTPError) -> URL: {url}")
-            raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
-
-        except Exception:
-            logger.error(f"未預期的錯誤 -> URL: {url}")
-            raise  # 視情況可以不 raise，僅跳過這個 url 、接續下一個 url
-
-        else:
-            if soup is not None:
-                # 以下放入你的爬蟲邏輯，例如：
-
-                # page_topic = None
-                # selector = (
-                #     "#__nuxt > div > div > main > div.page > "
-                #     "div.table.table--fixed.od-table.od-table--bordered.print-table > "
-                #     "div:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li > span"
-                # )
-                # if soup.select_one(selector):
-                #     page_topic = soup.select_one(selector).text.strip().replace(".zip", "")
-                # for a_tag in soup.find_all("a", title=re.compile("下載檔案")):
-                #     href = a_tag.get("href")
-                #     available_file_type = a_tag.get("title").replace("下載檔案", "").strip()
-                #     if href:
-                #         logger.info(f"成功找到下載連結: {href}")
-                #         result[href] = (available_file_type, page_topic)
-
-                result["your_key"] = "value_you_find"  # 根據需求設計
-            else:
-                logger.warning(f"Not found target information in {url}")
-    return result
-
-
+@retry_on_transient
 def download_and_extract_zip(
     download_link: str,
     headers: dict,
     zipfile_save_dir: str | Path,
     zipfile_name: str,
     unzipfile_save_dir: str | Path,
+    *,
+    filename_filter: Callable[[str], bool] = lambda name: name.endswith(".csv"),
+    verify: bool = True,
 ) -> list[str]:
     """Download a ZIP file from the given URL and extract its contents to the specified directory.
 
@@ -160,6 +152,9 @@ def download_and_extract_zip(
         zipfile_save_dir (str | Path): Path of directory to save the downloaded zip file.
         zipfile_name (str): File name for the zip file; should include the ``.zip`` extension as suffix.
         unzipfile_save_dir (str | Path): Path of directory to extract the zip contents into.
+        filename_filter (Callable[[str], bool]): 決定壓縮檔內哪些檔案要取出；
+            預設取出所有 ``.csv``。檔名的篩選規則因資料來源而異，屬呼叫端的職責。
+        verify (bool): 是否驗證 SSL 憑證，預設 ``True``。
 
     Returns:
         list[str] : Paths of extracted CSV files.
@@ -181,8 +176,8 @@ def download_and_extract_zip(
     try:
         logger.info(f"==== Downloading ZIP file from URL: {download_link} ====")
         response = requests.get(
-            download_link, headers=headers, stream=True, verify=False, timeout=300
-        )
+            download_link, headers=headers, stream=True, verify=verify, timeout=300
+        )  # stream=True 為了搭配後方 response.iter_content() 使用
         response.raise_for_status()
 
         with open(zipfile_path, "wb") as f:
@@ -190,19 +185,20 @@ def download_and_extract_zip(
                 if chunk:
                     f.write(chunk)
 
-    except requests.exceptions.Timeout:
-        logger.error(f"Timeout -> URL: {download_link}")
+    except requests.exceptions.Timeout as exc:
+        _log_attempt_failure(f"Timeout -> URL: {download_link}", exc)
         raise
 
-    except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error -> URL: {download_link}")
+    except requests.exceptions.ConnectionError as exc:
+        _log_attempt_failure(f"Connection error -> URL: {download_link}", exc)
         raise
 
-    except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error -> URL: {download_link}")
+    except requests.exceptions.HTTPError as exc:  # 429/5xx 會被重試，其餘不會
+        _log_attempt_failure(f"HTTP error -> URL: {download_link}", exc)
         raise
 
     except Exception:
+        # 非 requests 例外不會被重試，這一筆就是確定的失敗。
         logger.error("Unexpected error during zip download or save.")
         raise
 
@@ -233,12 +229,11 @@ def download_and_extract_zip(
                 except (UnicodeEncodeError, UnicodeDecodeError):
                     try:
                         filename = f.filename.encode("cp437").decode("cp950")
-                    except Exception:
+                    except (UnicodeEncodeError, UnicodeDecodeError):
                         filename = f.filename
 
-                # Save only CSV files whose names contain specific keywords.
-                # Adjust ".csv", "A1", "A2" as needed.
-                if filename.endswith(".csv") and ("A1" in filename or "A2" in filename):
+                # 取出哪些檔案由呼叫端決定（各資料來源的命名規則不同）。
+                if filename_filter(filename):
                     with (
                         z.open(f, mode="r") as source,
                         open(unzipfile_save_dir / filename, mode="wb") as target,
@@ -260,15 +255,23 @@ def download_and_extract_zip(
     return csvfile_pathlist
 
 
+@retry_on_transient
 def download_csv(
-    download_link: str, csvfile_name: str, csvfile_save_dir: str | Path
+    download_link: str,
+    headers: dict,
+    csvfile_name: str,
+    csvfile_save_dir: str | Path,
+    *,
+    verify: bool = True,
 ) -> list[str]:
     """Download CSV file from a passed URL to a targeted directory.
 
     Parameters:
         download_link (str): URL to download csv file.
+        headers (dict): Headers for HTTP request.
         csvfile_name (str): File name to save and it should include the file extension ``.csv`` as suffix.
         csvfile_save_dir (str | Path): Path of directory to save the csv file.
+        verify (bool): 是否驗證 SSL 憑證，預設 ``True``。
 
     Returns:
         list[str]: Paths of successfully saved CSV files.
@@ -289,9 +292,9 @@ def download_csv(
         logger.info(f"==== Downloading CSV file from URL: {download_link} ====")
         response = requests.get(
             download_link,
-            headers={},
+            headers=headers,
             stream=True,  # 為了搭配後方 response.iter_content() 使用
-            verify=False,
+            verify=verify,
             timeout=300,
         )
         response.raise_for_status()
@@ -302,19 +305,20 @@ def download_csv(
                 if chunk:
                     f.write(chunk)
 
-    except requests.exceptions.Timeout:
-        logger.error(f"Timeout -> URL: {download_link}")
+    except requests.exceptions.Timeout as exc:
+        _log_attempt_failure(f"Timeout -> URL: {download_link}", exc)
         raise
 
-    except requests.exceptions.ConnectionError:
-        logger.error(f"Connection error -> URL: {download_link}")
+    except requests.exceptions.ConnectionError as exc:
+        _log_attempt_failure(f"Connection error -> URL: {download_link}", exc)
         raise
 
-    except requests.exceptions.HTTPError:
-        logger.error(f"HTTP error -> URL: {download_link}")
+    except requests.exceptions.HTTPError as exc:  # 429/5xx 會被重試，其餘不會
+        _log_attempt_failure(f"HTTP error -> URL: {download_link}", exc)
         raise
 
     except Exception:
+        # 非 requests 例外不會被重試，這一筆就是確定的失敗。
         logger.error("Unexpected error during CSV download.")
         raise
 
