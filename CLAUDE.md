@@ -28,8 +28,8 @@ poetry run python -m src.task.l_fact_accident_main
 poetry run streamlit run src/app.py
 
 # 測試（pytest 無設定檔，直接指定路徑）
-poetry run pytest test/
-poetry run pytest test/unit_test/test_task_t_fact_accident_main.py::test_xxx
+poetry run pytest test/unit_test/
+poetry run pytest test/unit_test/test_util_paths.py::test_專案根含有_pyproject_toml
 
 # 後端整套服務（MySQL + Redis + Airflow scheduler/triggerer/api-server）
 docker compose up -d --build     # 需要根目錄有 .env
@@ -47,6 +47,8 @@ Airflow UI：`http://<host>:8081`（容器內 8080 對外 8081）。
 - `e_*.py` — 爬取 data.gov.tw / Google Maps API，回傳**檔案路徑 list**
 - `t_*.py` — 讀 CSV → 清洗 → 回傳 **DataFrame**
 - `l_*.py` — 接 DataFrame → 手組 `INSERT ... ON DUPLICATE KEY UPDATE` → `executemany` upsert 進 MySQL，回傳 `None`
+
+三個前綴之外還有**無前綴的工具型 task**（`create_*_tables.py`、`exec_mart_sql.py`），它們不屬於 e/t/l 任一階段，用描述性檔名。
 
 DAG 只負責串接：`dags/dNN_*.py` 把上述函式包進 `@task`，用 `pathlist` / DataFrame 在 task 間傳遞。所以**改 ETL 邏輯改 `src/task/`，改排程與相依改 `dags/`**。
 
@@ -78,26 +80,34 @@ logger = get_logger(__name__)
 2. **不要把故障吞成「正常但空」的回傳值** —— `docs/adr/0003-*.md`。回空 `DataFrame`／空 list／`None` 會讓「查無資料」與「服務故障」無法區分，上游監控因此失效。降級是呼叫端（前端）的政策，不是資料服務層的職責。
 3. **`exc_info=True` 只用在例外停止傳播之處** —— `docs/adr/0003-*.md` 子決策 5。判準一句話：**有 `raise` 就不帶 `exc_info`，沒有 `raise` 才帶**。內層重複輸出 traceback 會淹沒真正的邊界。Airflow task 不需自行記錄（例外傳出時 Airflow 自動輸出完整 traceback）；Streamlit 前端則必須記錄，因為 `st.error()` 只給使用者看。
 
-ADR-0001 已套用到 `src/util/` 全部工具與 `src/task/` 全部 20 個 ETL 模組 —— **這些模組都能在無 Airflow 的環境（地端、pytest、Cloud Run）被匯入**，由 `test/unit_test/test_util_logger_crtx.py` 把關。`dags/` 底下仍照常 import airflow，那是它該做的事。
+ADR-0001 已套用到 `src/util/` 全部工具與 `src/task/` 全部 21 個模組 —— **這些模組都能在無 Airflow 的環境（地端、pytest、Cloud Run）被匯入**，由 `test/unit_test/test_util_logger_crtx.py` 把關。`dags/` 底下仍照常 import airflow，那是它該做的事。
 
-規則 1 全 codebase 已無例外（`AirflowException` 零出現）。規則 2、3 在 `src/` 內已無殘留，`dags/d04` 仍有 `finally: return` 吞例外的殘留。
+三條規則在 `src/` 與 `dags/` 內**皆已無例外**（`AirflowException` 零出現；`finally` 內零 `return`；有 `raise` 卻帶 `exc_info` 零處，由 AST 稽核把關）。
 
-### 連線工具（`src/util/`）
+補充兩條後續 ADR 追加的規則：
 
-連線層的重構已完成，`src/util/` 只剩一套工具：
+4. **`finally` 只負責釋放資源** —— `docs/adr/0005-*.md`。裡面放 `return` 會丟棄正在傳播的例外；清理動作要有守衛（用 `mysql_utils.close_quietly()`），否則 `close()` 自身的例外會取代原例外。
+5. **會被重試的失敗記 `warning`，不會被重試的記 `error`** —— `docs/adr/0006-*.md`。抓取層在 `@retry_on_transient` 之下，用 ERROR 記錄一次可自癒的 503 會讓監控放大成三筆告警。
+
+### 共用工具（`src/util/`）
+
+`src/util/` 的重構已完成（ADR-0001、0003～0007），五支模組各有明確職責、有測試把關：
 
 | 模組 | 職責 |
 | --- | --- |
-| `mysql_utils.py` | MySQL 的**唯一存取面**：Engine 快取、綱要檢查、查詢、upsert |
+| `mysql_utils.py` | MySQL 的**唯一存取面**：Engine 快取、綱要檢查、查詢、upsert、`close_quietly()` |
 | `redis_utils.py` | Redis 連線池單例與 Pickle 快取讀寫 |
-| `crawling_utils.py` | 抓取工具，**尚未接上**（見下） |
+| `crawling_utils.py` | **通用**抓取能力：重試、故障分類、`fetch_soup()`、兩支下載函式 |
+| `paths.py` | 所有路徑的單一基準 |
 | `logger_crtx.py` | `get_logger(name)` |
 
-**取 MySQL 連線一律用 `get_engine_to_mysql(database)`，不要自己 `create_engine()`，也不要 `dispose()` 它** —— 理由見 `docs/adr/0004-*.md`。Engine 以 `database` 為鍵快取在模組層 `_ENGINES`，生命週期與行程等長；呼叫端關掉它等於丟棄整個連線池。Redis 側對應的是 `redis_utils._REDIS_POOL`（外部走 `create_redis_client()`）。
+**MySQL** —— 取連線一律用 `get_engine_to_mysql(database)`，不要自己 `create_engine()`，也不要 `dispose()` 它（`docs/adr/0004-*.md`）。Engine 以 `database` 為鍵快取在模組層 `_ENGINES`，生命週期與行程等長；呼叫端關掉它等於丟棄整個連線池。Redis 側對應的是 `redis_utils._REDIS_POOL`（外部走 `create_redis_client()`）。查詢走 `get_table_from_sqlserver()`（名字說謊，查的是 MySQL），寫入走 `upsert_to_table()`。`d04` 的 multistatement 與 `upsert_to_table` 內部另走 pymysql 裸連線，那是刻意的 —— 裸連線有明確的 `close()`，不需要池。
 
-查詢走 `mysql_utils.get_table_from_sqlserver()`（名字說謊，查的是 MySQL 不是 SQL Server），寫入走 `upsert_to_table()`。`d04` 的 multistatement 與 `upsert_to_table` 內部另走 pymysql 裸連線，那是刻意的 —— 裸連線有明確的 `close()`，不需要池。
+**抓取** —— `crawling_utils` 只放「換一個資料來源仍然成立」的東西（`docs/adr/0006-*.md`）。站台專屬的解析規則、檔名篩選屬於 `src/task/e_*.py`。暫時性故障（5xx、429、連線錯誤）由 `@retry_on_transient` 自動重試三次；`verify` 預設 `True`，全專案只有 `e_crawling_traffic_accident.VERIFY_SSL = False` 一處停用（data.gov.tw 的憑證鏈有問題）。
 
-已知阻礙：`crawling_utils.download_and_extract_zip()` 的參數順序與現有呼叫端不相容，這是它接上 `e_crawling_traffic_accident.py` 的卡點。`convert_time_zone.py` 與 `validate_csv_encoding.py` 是零呼叫端的孤兒模組，去留未定。
+**路徑** —— 一律從 `src.util.paths` 取，**不要用 `Path().resolve()`**（那是 CWD 不是專案根，`docs/adr/0007-*.md`）。資料落點 `RAW_DATA_DIR` / `PROCESSED_DATA_DIR` 指向 `<專案根>/data/{raw,processed}`（compose 有掛載，`.gitignore` 已排除）；程式碼資產 `MART_SQL_DIR` 由 `__file__` 推導。`test_util_paths.py` 有 AST 護欄，寫回 `Path().resolve()` 會立刻紅燈。
+
+`convert_time_zone.py` 與 `validate_csv_encoding.py` 是零呼叫端的孤兒模組，去留未定。
 
 ## 環境變數
 
@@ -129,8 +139,9 @@ Skill 檔案的實體放在 `.agents/skills/`（**納入版控**），`.claude/s
 
 ## 已知狀態
 
-- `test/unit_test/` 現有 52 個測試（`poetry run pytest test/unit_test/`）。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用 `test_util_*.py`，測試函式名用中文並在 docstring 寫出「釘住的是哪個決策」。沒有 CI 測試 gate，推 `main` 前需自行跑過。
+- `test/unit_test/` 現有 127 個測試（`poetry run pytest test/unit_test/`）。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用 `test_util_*.py`，測試函式名用中文並在 docstring 寫出「釘住的是哪個決策」。沒有 CI 測試 gate，推 `main` 前需自行跑過。
 - `src/app.py` 的按鈕指向多個尚未建立的頁面（`v_act1_city_accident.py`、`v_policy_impact.py`、`v_act3_avoid.py`、`v_act6_chat.py` 等），`src/pages/` 目前只有 `v_act1_all_accident.py`，點擊會報錯。
+- ETL 產出的檔案落在 `data/raw`（爬回的原始檔）與 `data/processed`（解壓後的 CSV），兩者都在 `.gitignore` 內，且 compose 有掛載 `./data:/opt/airflow/data`。**舊路徑是 `test/raw_data`，已於 ADR-0007 廢除**。
 - `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分。
 - `pyproject.toml` 的 `[tool.poetry] packages = [{include = "src"}]` 是讓 `src.xxx` 絕對匯入能運作的關鍵；容器內則改由 compose 設定的 `PYTHONPATH=/opt/airflow/`（Airflow）與 `PYTHONPATH=/app`（Cloud Run）達成同樣效果。
 - `pyproject.toml` 的依賴清單與 `requirements.txt` 不會自動同步，兩者皆納入版控，改依賴時要一起更新。
