@@ -113,7 +113,19 @@ ADR-0001 已套用到 `src/util/` 全部工具與 `src/task/` 全部 21 個模�
 
 `.env`（gitignore）供 docker compose 使用；`.env.example` 是範本。實際部署時由 GitHub Secrets 注入：backend workflow 在 VM 上 `echo` 生成 `.env`，Cloud Run workflow 用 `--set-env-vars` 傳入。
 
-關鍵變數：`MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE/MYSQL_ROOT_PASSWORD`、`MYSQL_AIRFLOW_DATABASE`（Airflow metadata DB 與業務 DB 分開）、`REDIS_HOST/REDIS_PORT/REDIS_PASSWORD`、`GOOGLE_MAP_API_KEY`、`AIRFLOW_SECRET_KEY`、`AIRFLOW_ADMIN_USER`、`AIRFLOW_ADMIN_PASSWORD`、`AIRFLOW_ADMIN_EMAIL`。
+共 15 個變數，分成互不重疊的兩群（已與範本檔核對過，無缺漏也無多餘）：
+
+**Python 讀取的 9 個**（`os.getenv`，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模組層）
+
+`MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`GOOGLE_MAP_API_KEY`
+
+其中 **`MYSQL_USER`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`、`GOOGLE_MAP_API_KEY` 是必填**，缺少時會在建立連線／呼叫 API 的那一刻拋出「未設定 XXX，請檢查環境變數設置」（`docs/adr/0008-*.md`）。`*_HOST` / `*_PORT` 有預設值（`localhost` / `3306` / `6379`），缺了仍可運作。
+
+**只有 docker compose 用的 6 個**（Python 從不讀取，但**不可刪除**）
+
+`MYSQL_AIRFLOW_DATABASE`（Airflow metadata DB 與業務 DB 分開）、`MYSQL_ROOT_PASSWORD`、`AIRFLOW_SECRET_KEY`、`AIRFLOW_ADMIN_USER`、`AIRFLOW_ADMIN_PASSWORD`、`AIRFLOW_ADMIN_EMAIL`
+
+這群是 Airflow 啟動、以及在 MySQL 中建立它自己的 metadata database 的必要條件。「Python 不讀取」與「可以刪除」是兩件事。
 
 Cloud Run 上 `MYSQL_HOST` / `REDIS_HOST` 是 VM 的**內網 IP**（寫死在 workflow 中），改 VM 會需要同步改 `.github/workflows/deploy-cloud-run.yml`。
 
