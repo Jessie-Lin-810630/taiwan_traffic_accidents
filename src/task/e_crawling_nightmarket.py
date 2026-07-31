@@ -9,7 +9,9 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from tenacity import retry, retry_if_exception, stop_after_attempt
 
+from src.util.crawling_utils import RETRY_ATTEMPTS, RETRY_WAIT, is_transient
 from src.util.logger_crtx import get_logger
 
 logger = get_logger(__name__)
@@ -139,19 +141,122 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_MAP_API_KEY")
 
+# 夜市查不到是常態（維基名稱不一定對得上 Google Maps），但大量查不到代表
+# 系統性問題（金鑰失效、頁面改版）。門檻可調，並非算出來的值。
+MAX_FAILURE_RATE = 0.5
 
+
+class PlacesAPIError(RuntimeError):
+    """Google Places API 以 HTTP 200 回報的失敗。
+
+    傳輸層成功（狀態碼 200），失敗寫在 body 的 status 欄位，
+    因此無法用 `requests` 的例外體系表達。
+    """
+
+
+class TransientPlacesAPIError(PlacesAPIError):
+    """暫時性失敗（配額超限、伺服器錯誤），值得重試。"""
+
+
+class PermanentPlacesAPIError(PlacesAPIError):
+    """永久性失敗（授權或參數問題），重試只會浪費配額並延後告警。"""
+
+
+# Google Places API 的失敗寫在 body 的 status 欄位，HTTP 狀態碼一律是 200，
+# 因此必須顯式分類，否則所有失敗都會被誤判成「找不到地點」（ADR-0006）。
+# 不在此表中的 status 都不是故障：OK 代表有結果，ZERO_RESULTS 與
+# NOT_FOUND（Place Details 專有，place_id 已失效）代表查無資料。
+# status 定義見：
+# https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place#PlacesSearchStatus
+API_STATUS_ERRORS: dict[str, tuple[type[PlacesAPIError], str]] = {
+    "OVER_QUERY_LIMIT": (TransientPlacesAPIError, "配額或 QPS 超限"),
+    "UNKNOWN_ERROR": (TransientPlacesAPIError, "伺服器暫時錯誤"),
+    "REQUEST_DENIED": (
+        PermanentPlacesAPIError,
+        "請求遭拒，通常是 API 金鑰無效、未啟用對應的 Places API，或超出金鑰的授權範圍",
+    ),
+    "INVALID_REQUEST": (
+        PermanentPlacesAPIError,
+        "請求參數有誤，通常是缺少必要參數（如 input、inputtype 或 place_id），"
+        "屬於呼叫端的程式錯誤",
+    ),
+}
+
+# 查無資料的兩個 status：不是故障，僅供 `_has_data()` 內部判斷。
+_NOT_FOUND_STATUSES = frozenset({"ZERO_RESULTS", "NOT_FOUND"})
+
+
+def _has_data(data: dict, context: str) -> bool:
+    """檢查 Places API 回應的 status，故障一律拋出（ADR-0006）。
+
+    Parameters:
+        data (dict): API 回應解碼後的 dict。
+        context (str): 用於錯誤訊息的查詢對象（夜市名稱或 place_id）。
+
+    Returns:
+        bool: True 代表回應含可用資料；False 代表查無資料（不是故障）。
+
+    Raises:
+        TransientPlacesAPIError: 配額超限或伺服器錯誤，由 tenacity 的
+        retry_on_transient_api wrapper 重試。
+        PermanentPlacesAPIError: 授權或參數錯誤，重試無用，立即失敗。
+    """
+    status = data.get("status", "UNKNOWN_ERROR")
+
+    if status in API_STATUS_ERRORS:
+        error_type, hint = API_STATUS_ERRORS[status]
+        raise error_type(
+            f"Google Places API 回報 {status}（查詢對象：{context}）：{hint}"
+        )
+
+    # 如果不需要 raise 暫時性失敗或是永久性失敗，則改檢查是否為空資料後，回傳布林值。
+    return status not in _NOT_FOUND_STATUSES
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """這兩支 API 函式有兩種暫時性失敗來源，都值得重試（ADR-0006）。
+
+    - 傳輸層：連線斷、Google 回 5xx／429 → `requests` 的例外，由 `is_transient` 認得
+    - body 層：HTTP 200 但 status 是 OVER_QUERY_LIMIT → `TransientPlacesAPIError`
+
+    兩者併成單一判斷式，而不是疊兩層裝飾器 —— 疊起來雖然條件互斥、
+    行為正確，但重試上限會變成 3×3 的隱患，且讀者要推敲兩層的交互作用。
+    """
+    # TransientPlaceAPIError 代表 status_code = 200 但是 status 欄位暗示有錯誤；
+    # is_transient() 代表 status_code == 429/5xx、TimeoutError 或 ConnectionError。
+    # 意即，TransientPlaceAPIError、TimeoutError 、 ConnectionError、429/5xx 都會回傳 True。
+    return isinstance(exc, TransientPlacesAPIError) or is_transient(exc)
+
+
+# 使用 _should_retry 判斷是否為暫時性失敗，因為暫時性失敗適合重試。
+retry_on_transient_api = retry(
+    retry=retry_if_exception(_should_retry),
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=RETRY_WAIT,
+    reraise=True,
+)
+
+
+@retry_on_transient_api
 def search_place_id(place_name: str) -> None | str:
     """Call the GoogleMap Place API to request the place IDs of each
 
     interested location.
 
+    回傳 ``None`` 只代表 Google Maps 查無此地點（``ZERO_RESULTS``）；
+    配額超限會重試，金鑰或參數錯誤則立即拋出（ADR-0006）。
+
     :param place_name: location name or shop name (e.g. night market name)
     :type place_name: str
 
-    :returns: If requests.Exception or not found ID, it will return None.
-    Otherwise return the place ID.
+    :returns: The place ID, or None when the place is genuinely not found.
     :rtype: None or str
+
+    :raises TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
+    :raises PermanentPlacesAPIError: 授權或參數錯誤。
+    :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
     """
+    # 參考文件: https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place
     base_url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
     params = {
         "input": place_name,
@@ -162,10 +267,11 @@ def search_place_id(place_name: str) -> None | str:
     }
     try:
         response = requests.get(base_url, params=params, timeout=120)
-    except requests.exceptions.Timeout:
+        response.raise_for_status()
+    except requests.exceptions.Timeout:  # 被 _should_entry() 判定為可重試
         logger.error(f"Timeout while fetching from {place_name}")
         raise
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError:  # 被 _should_entry() 判定為可重試
         logger.error(f"Connection error while fetching from {place_name}")
         raise
     except requests.exceptions.HTTPError:
@@ -176,23 +282,31 @@ def search_place_id(place_name: str) -> None | str:
         raise
     else:
         data = response.json()
-        if data.get("candidates"):
-            return data["candidates"][0]["place_id"]
-    return None
+        # 若 _has_data() raise TransientPlacesAPIError，則被 _should_entry() 判定為可重試
+        if not _has_data(data, place_name):
+            return None
+        return data["candidates"][0]["place_id"]
 
 
+@retry_on_transient_api
 def get_place_details(place_id: str) -> dict | None:
     """Use the place ID and call the GoogleMap Place API to get detailed information
 
     of a location, including name, rating, formatted_address, opening_hours, URL to GoogleMap
     and geometry.
 
+    回傳 ``None`` 只代表查無此 place_id 的細節（``ZERO_RESULTS``）；
+    配額超限會重試，金鑰或參數錯誤則立即拋出（ADR-0006）。
+
     :param place_id: place ID registered in GoogleMap API
     :type place_id: str
 
-    :returns: If requests.Exception or not found details, it will return None.
-    Otherwise, return a python dict object decoded from the json-type response.
+    :returns: A python dict decoded from the json response, or None when not found.
     :rtype: dict or None
+
+    :raises TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
+    :raises PermanentPlacesAPIError: 授權或參數錯誤。
+    :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
     """
     base_url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
@@ -203,6 +317,7 @@ def get_place_details(place_id: str) -> dict | None:
     }
     try:
         response = requests.get(base_url, params=params, timeout=120)
+        response.raise_for_status()
     except requests.exceptions.Timeout:
         logger.error(f"Timeout while fetching from {place_id}")
         raise
@@ -216,7 +331,10 @@ def get_place_details(place_id: str) -> dict | None:
         logger.error(f"Unexpected error while fetching from {place_id}")
         raise
     else:
-        return response.json()
+        data = response.json()
+        if not _has_data(data, place_id):
+            return None
+        return data
 
 
 def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
@@ -262,6 +380,15 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
 
         logger.info(f"====已取得{name}的地理位置細節====")
         all_details_json.append(details)
+
+    # 統計查到空資料的筆數
+    failure_count = len(failure_id_list) + len(failure_detail_list)
+    failure_rate = failure_count / len(nm_names) if len(nm_names) > 0 else 1.0
+    if failure_rate > MAX_FAILURE_RATE:
+        raise ValueError(
+            f"夜市查詢失敗率 {failure_rate:.0%}（{failure_count}/{len(nm_names)}）"
+            f"超過門檻 {MAX_FAILURE_RATE:.0%}，請檢查夜市名稱來源與 API 設定"
+        )
 
     # 合併儲存所有夜市 details 到同一個json
     # 定義存檔路徑，並確保資料夾存在
