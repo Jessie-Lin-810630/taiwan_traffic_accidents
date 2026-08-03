@@ -61,7 +61,7 @@ class TestGetAllNightmarkets:
 
 
 class TestCalAccidentsNearbyNightmarket:
-    """預計算路徑：批次容錯保留，但失敗要在結尾判定（ADR-0003 子決策 3）。"""
+    """預計算路徑：一批一次查詢（ADR-0009），失敗即整批失敗。"""
 
     def test_批次不存在時拋出而非回傳字串(self):
         """批次不存在代表上游未產出，不可當成正常結果。"""
@@ -69,8 +69,8 @@ class TestCalAccidentsNearbyNightmarket:
             with pytest.raises(ValueError, match="無法計算附近事故"):
                 ds.cal_accidents_nearby_nightmarket("xcom_claim_check:missing")
 
-    def test_全部夜市失敗時拋出(self):
-        """逐個夜市可跳過，但全數失敗必須讓 task 紅燈。"""
+    def test_查詢失敗時整批拋出(self):
+        """一次查詢服務整批，它失敗就是整批沒資料，沒有部分成功可言（ADR-0009 子決策 6）。"""
         with (
             patch.object(ds, "get_cache", return_value=[NIGHTMARKET_ROW]),
             patch.object(
@@ -80,7 +80,7 @@ class TestCalAccidentsNearbyNightmarket:
             ),
             patch.object(ds, "set_cache"),
         ):
-            with pytest.raises(RuntimeError, match="1/1 個夜市計算失敗"):
+            with pytest.raises(OSError, match="mysql down"):
                 ds.cal_accidents_nearby_nightmarket("batch_key")
 
     def test_全部成功時回傳完成訊息(self):
@@ -99,7 +99,6 @@ class TestCalAccidentsNearbyNightmarket:
                 ds, "get_accident_table_pedestrian_involved_in", return_value=df
             ),
             patch.object(ds, "set_cache"),
-            patch.object(ds.time, "sleep"),
         ):
             result = ds.cal_accidents_nearby_nightmarket("batch_key")
 
