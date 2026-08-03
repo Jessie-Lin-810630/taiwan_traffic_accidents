@@ -102,10 +102,9 @@ services:
     restart: "no" # 執行完就結束
     environment:
       # 暫時覆蓋前言所造的環境變數，讓init可以用root順利登入MySQL，因為我們目標是確認airflow-mysql可以正常連線，而不是因授權問題而被拒絕在外。
-      #
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@mysql-db:3306/${MYSQL_AIRFLOW_DATABASE}
     command: >
-      bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
+      bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $$AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
     depends_on:
       mysql-db: { condition: service_healthy }
       redis-cache: { condition: service_healthy }
