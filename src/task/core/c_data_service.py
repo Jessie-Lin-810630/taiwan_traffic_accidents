@@ -1,7 +1,6 @@
 """業務運算層：夜市周邊事故計算、快取讀寫與全台總表聚合。"""
 
 import itertools
-import time
 import uuid
 from datetime import datetime
 
@@ -320,140 +319,153 @@ def get_accident_heatmap_data(sample_size: int = 8000):
     return df
 
 
+# 粗篩框的半徑，同時是 aggregate_national_master() 讀取的契約 key 所帶的半徑
+ROUGH_RADIUS_KM = 3.0
+
+# 前端與聚合階段實際會用到的欄位；查詢仍撈全表欄位，缺欄位時在此靜默跳過
+ACCIDENT_MAP_COLUMNS = [
+    "accident_id",
+    "accident_date",
+    "accident_year",
+    "accident_hourtime",
+    "accident_time",
+    "accident_weekday",
+    "cause_analysis_major_individual_grouped",
+    "party_action_major",
+    "weather_condition",
+    "light_condition",
+    "road_surface_condition",
+    "latitude",
+    "longitude",
+    "death_count",
+    "injury_count",
+    "accident_type_major_grouped",
+    "cause_analysis_minor_individual",
+]
+
+
+def _build_batch_bbox_query(
+    batch: list[dict], radius_km: float = ROUGH_RADIUS_KM
+) -> tuple[str, dict]:
+    """組出涵蓋整批夜市粗篩框「聯集」的單一查詢與其綁定參數（ADR-0009）。
+
+    查詢的粒度必須與使用它的粒度一致：本函式的呼叫端服務的是一個批次，
+    查詢就該是一句。逐夜市各發一次的話，同一個都會區的鄰近夜市會把
+    重疊區域的事故重複撈回來，而且被查的分析表是用 `CREATE TABLE ... AS SELECT`
+    生出來的、沒有索引（那種建表方式只複製資料不複製索引），
+    每一次都是一趟全表掃描。
+
+    座標一律走 bind parameter，不以 f-string 內插回查詢字串。
+
+    Parameters:
+        batch (list[dict]): 一個批次的夜市，每筆須含 `lat` 與 `lon`。
+        radius_km (float): 粗篩方框的半徑（公里）。
+
+    Returns:
+        tuple[str, dict]: 帶具名佔位符的 DQL，以及對應的參數字典。
+    """
+    offset = radius_km / 111  # 1度大約等於111公里
+    clauses = []
+    params: dict[str, float] = {}
+
+    for i, a_nightmarket in enumerate(batch):
+        nm_lat, nm_lon = a_nightmarket["lat"], a_nightmarket["lon"]
+        params[f"min_lat_{i}"] = nm_lat - offset
+        params[f"max_lat_{i}"] = nm_lat + offset
+        params[f"min_lon_{i}"] = nm_lon - offset
+        params[f"max_lon_{i}"] = nm_lon + offset
+        clauses.append(
+            f"(latitude BETWEEN :min_lat_{i} AND :max_lat_{i}"
+            f" AND longitude BETWEEN :min_lon_{i} AND :max_lon_{i})"
+        )
+
+    query = (
+        "SELECT * FROM analysis_pesdestrian_involving_accident WHERE "
+        + " OR ".join(clauses)
+    )
+    return query, params
+
+
 # 由dag_precompute調用，預計要依賴get_and_slice_nightmarkets_multibatches()
 def cal_accidents_nearby_nightmarket(
     batch_key: str,
-    radius_m_list: list[float | int] | None = [3000],
-    year_targets: list[int] | None = ["all_sample"],
+    radius_m_list: list[float | int] | None = None,
+    year_targets: list[int | str] | None = None,
 ):  # process_market_batch()原名
     """計算一個批次內每個夜市周邊的事故，並將粗篩與細篩結果寫入 Redis。
 
-    單一夜市失敗僅跳過並累計，迴圈結束後若有失敗即拋出（ADR-0003 子決策 3）。
+    整個批次只發一次查詢（ADR-0009），因此查詢失敗即整批失敗 ——
+    一次查詢服務整批，它失敗就是整批沒有資料，沒有部分成功可言。
     """
+    radius_m_list = radius_m_list or [3000]
+    year_targets = year_targets or ["all_sample"]
+
     # 先拿cache_key從Redis取夜市資料。
     # Redis 故障會直接拋出 RedisError（ADR-0003），因此 None 只代表快取未命中。
     batch = get_cache(batch_key)
     if not batch:
         raise ValueError(f"批次 {batch_key} 在 Redis 中不存在或為空，無法計算附近事故")
 
-    # 逐個夜市失敗僅跳過，但累計失敗清單，迴圈結束後判定（ADR-0003 子決策 3）
-    failed_markets = []
+    # 一個批次一次查詢：撈回這 30 個夜市 3 公里框的聯集（ADR-0009）
+    query, params = _build_batch_bbox_query(batch)
+    df_batch = get_accident_table_pedestrian_involved_in(query, params)
 
-    # 遍歷每個夜市，挑選該地附近3公里的方形區域內發生過的事故案件，粗篩。
+    valid_cols = [c for c in ACCIDENT_MAP_COLUMNS if c in df_batch.columns]
+    df_batch = df_batch[valid_cols].copy()
+
+    if not df_batch.empty:
+        df_batch["latitude"] = pd.to_numeric(df_batch["latitude"], errors="coerce")
+        df_batch["longitude"] = pd.to_numeric(df_batch["longitude"], errors="coerce")
+        df_batch["accident_year"] = pd.to_numeric(
+            df_batch["accident_year"], errors="coerce"
+        )
+
+    max_offset = ROUGH_RADIUS_KM / 111  # 1度大約等於111公里。將3公里轉成度
+
+    # 遍歷每個夜市，從批次結果中切出該地附近3公里的方形區域，粗篩。
     for a_nightmarket in batch:  # a_nightmarket: a dict
         nm_lat, nm_lon = a_nightmarket["lat"], a_nightmarket["lon"]
-        try:
-            max_offset = (3000 / 1000) / 111  # 1度大約等於111公里。將3公里轉成度
-            params = {
-                "min_lat": nm_lat - max_offset,
-                "max_lat": nm_lat + max_offset,
-                "min_lon": nm_lon - max_offset,
-                "max_lon": nm_lon + max_offset,
-            }
-            query = f"""
-                        SELECT  *
-                            FROM analysis_pesdestrian_involving_accident
-                                WHERE latitude BETWEEN {params["min_lat"]} AND {params["max_lat"]}
-                                AND longitude BETWEEN {params["min_lon"]} AND {params["max_lon"]}
-                        """
-            # 直接向MySQL查詢資料。
-            df_nearby_accidents = get_accident_table_pedestrian_involved_in(query)
 
-            map_columns = [
-                "accident_id",
-                "accident_date",
-                "accident_year",
-                "accident_hourtime",
-                "accident_time",
-                "accident_weekday",
-                "cause_analysis_major_individual_grouped",
-                "party_action_major",
-                "weather_condition",
-                "light_condition",
-                "road_surface_condition",
-                "latitude",
-                "longitude",
-                "death_count",
-                "injury_count",
-                "accident_type_major_grouped",
-                "cause_analysis_minor_individual",
-            ]
-            valid_cols = [c for c in map_columns if c in df_nearby_accidents.columns]
-            df_nearby_accidents = df_nearby_accidents[valid_cols]
+        # reset_index：粗篩結果現在是批次結果的切片，索引須還原成與「逐夜市各查一次」
+        # 時代相同的 0..n-1，快取內容才逐列等價
+        df_nearby_accidents = df_batch[
+            df_batch["latitude"].between(nm_lat - max_offset, nm_lat + max_offset)
+            & df_batch["longitude"].between(nm_lon - max_offset, nm_lon + max_offset)
+        ].reset_index(drop=True)
 
-        except Exception:
-            logger.error(
-                f"夜市 ({nm_lat:.4f}, {nm_lon:.4f}) 的周邊事故查詢失敗", exc_info=True
+        # 預計算路徑：快取本身就是產出，寫入失敗即 raise（ADR-0003 子決策 2）
+        # 這把 key 是 aggregate_national_master() 唯一會讀的，因此無條件寫入，
+        # 不能取決於呼叫端有沒有把 3000 與 "all_sample" 傳進 radius_m_list／year_targets
+        cache_key_rough = f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_{ROUGH_RADIUS_KM:.1f}_all_sample"
+        set_cache(cache_key_rough, df_nearby_accidents, 43200)
+        logger.info(f"cache_key_rough: {cache_key_rough} 存取成功")
+
+        # 細篩：半徑清單與年份清單，的組合、來計算車禍與夜市的交集
+        for r_m, y_target in itertools.product(radius_m_list, year_targets):
+            r_km = float(r_m) / 1000.0
+            cache_key_per_product = (
+                f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_{r_km:.1f}_{y_target}"
             )
-            failed_markets.append(
-                a_nightmarket.get("name", f"{nm_lat:.4f},{nm_lon:.4f}")
+            # 預設參數下這一圈與粗篩是同一把 key、同一份資料，寫第二次沒有意義
+            if cache_key_per_product == cache_key_rough:
+                continue
+
+            offset = r_km / 111  # 1度大約等於111公里。將公里轉成度
+
+            # 製作過濾條件
+            mask = df_nearby_accidents["latitude"].between(
+                nm_lat - offset, nm_lat + offset
+            ) & df_nearby_accidents["longitude"].between(
+                nm_lon - offset, nm_lon + offset
             )
-            continue
-        else:
-            if not df_nearby_accidents.empty:
-                df_nearby_accidents["latitude"] = pd.to_numeric(
-                    df_nearby_accidents["latitude"], errors="coerce"
-                )
-                df_nearby_accidents["longitude"] = pd.to_numeric(
-                    df_nearby_accidents["longitude"], errors="coerce"
-                )
-                df_nearby_accidents["accident_year"] = pd.to_numeric(
-                    df_nearby_accidents["accident_year"], errors="coerce"
-                )
+            if y_target != "all_sample":
+                mask &= df_nearby_accidents["accident_year"] == int(y_target)
 
-            # 預計算路徑：快取本身就是產出，寫入失敗即 raise（ADR-0003 子決策 2）
-            cache_key_rough = (
-                f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_3.0_all_sample"
-            )
-            set_cache(cache_key_rough, df_nearby_accidents, 43200)
-            logger.info(f"cache_key_rough: {cache_key_rough} 存取成功")
+            # 跳用條件完成細篩並存入新的dataframe容器
+            df_target = df_nearby_accidents[mask]
 
-            # 細篩：半徑清單與年份清單，的組合、來計算車禍與夜市的交集
-            # 如果沒有特別指定半徑清單與年份清單，就會以預設值3公里＋全年度一起算，其計算結果跟前面try:等值。
-            for r_m, y_target in itertools.product(radius_m_list, year_targets):
-                r_km = float(r_m) / 1000.0
-                offset = r_km / 111  # 1度大約等於111公里。將公里轉成度
-
-                # 製作過濾條件
-                if y_target != "all_sample":
-                    mask = (
-                        (
-                            df_nearby_accidents["latitude"].between(
-                                nm_lat - offset, nm_lat + offset
-                            )
-                        )
-                        & (
-                            df_nearby_accidents["longitude"].between(
-                                nm_lon - offset, nm_lon + offset
-                            )
-                        )
-                        & (df_nearby_accidents["accident_year"] == int(y_target))
-                    )
-                else:
-                    mask = (
-                        df_nearby_accidents["latitude"].between(
-                            nm_lat - offset, nm_lat + offset
-                        )
-                    ) & (
-                        df_nearby_accidents["longitude"].between(
-                            nm_lon - offset, nm_lon + offset
-                        )
-                    )
-
-                # 跳用條件完成細篩並存入新的dataframe容器
-                df_target = df_nearby_accidents[mask]
-
-                # 預計算路徑：寫入失敗即 raise（ADR-0003 子決策 2）
-                cache_key_per_product = f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_{r_km:.1f}_{y_target}"
-                set_cache(cache_key_per_product, df_target, 43200)
-            time.sleep(0.05)
-
-    if failed_markets:
-        raise RuntimeError(
-            f"{batch_key}: {len(failed_markets)}/{len(batch)} 個夜市計算失敗 —— "
-            f"{', '.join(failed_markets[:5])}"
-            f"{' 等' if len(failed_markets) > 5 else ''}"
-        )
+            # 預計算路徑：寫入失敗即 raise（ADR-0003 子決策 2）
+            set_cache(cache_key_per_product, df_target, 43200)
 
     return f"{batch_key} 處理完成"
 
