@@ -446,8 +446,8 @@ def main() -> None:
             )
             df_transposed.index = ["排名", f"{mode}"]
 
-            with st.container(border=True):
-                st.dataframe(df_transposed, width=True)
+            with st.container():
+                st.dataframe(df_transposed, width="content")
 
             st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
 
@@ -535,7 +535,7 @@ def main() -> None:
                     ),
                 )
 
-                st.plotly_chart(fig_heat_val, width=True)
+                st.plotly_chart(fig_heat_val, width="stretch")
 
             with col_hm_right:
                 st.markdown(
@@ -566,7 +566,7 @@ def main() -> None:
                     ),
                 )
 
-                st.plotly_chart(fig_heat_rank, width=True)
+                st.plotly_chart(fig_heat_rank, width="stretch")
 
 
 if __name__ == "__main__":
