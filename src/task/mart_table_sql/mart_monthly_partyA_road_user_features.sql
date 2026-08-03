@@ -121,7 +121,7 @@ BEGIN
     -- IF/ELSE條件判斷
     IF table_exists > 0 THEN
 		RENAME TABLE
-			mmart_monthly_partyA_road_user_features to mart_monthly_partyA_road_user_features_deprecated,
+			mart_monthly_partyA_road_user_features to mart_monthly_partyA_road_user_features_deprecated,
 			mart_monthly_partyA_road_user_features_tmp to mart_monthly_partyA_road_user_features;
 
 	ELSE
