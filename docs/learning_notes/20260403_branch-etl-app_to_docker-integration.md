@@ -13,8 +13,8 @@
     ```
     MYSQL_HOST=localhost # change to service name by mysql container
     MYSQL_PORT=3306 # change to 3307 if need to connect with container and on-premise and if 3306 is already used for MySQL server on-premise.
-    
-    MYSQL_USER=root # change to service name by airflow container.  
+
+    MYSQL_USER=root # change to service name by airflow container.
     # Important: You cannot use root for MYSQL_USER because it will conflict with the built-in role when initializing MySQL container (root will be automatically created so we cannot add new user that is also named as root).
 
     MYSQL_PASSWORD= # password when connect with mysql container with airflow
@@ -121,10 +121,10 @@
             print(f"Error msg {e}")
             raise AirflowException
     ```
-    - 
+    -
 9. Trigger the DAGs
     - Keypoint: Let the Task returns shorter str, dict, list object since AIRFLOW utilizes it as x-com but strictly limit the length of x-com.
-    - Task dependency shall be defined after instanced. E.g.: 
+    - Task dependency shall be defined after instanced. E.g.:
     ```
         # option 1
         task1_done = task1_func()
@@ -137,9 +137,9 @@
         task1_func() >> task2_func()
     ```
     - `Note`, some of SQL syntax may not compatible when running with python environment. For example:
-        * DATE_FORMAT(d.accident_date, "%Y-%m") AS `accident_yearmonth`:  
+        * DATE_FORMAT(d.accident_date, "%Y-%m") AS `accident_yearmonth`:
         如果不是直接在MySQL環境下互動，只需打"%Y-%m"，若在MySQL環境下執行該函式，要打%%Y-%%m。
-        
+
         * DELIMITER $$ 搭配 pymysql的cursor.execute()會失效，無法解析DELIMITER語法。
 
         * 使用AIRFLOW + pymysql來批次執行複數個SQL語句時，有3種方式，用途與效果不一樣:
@@ -147,7 +147,7 @@
                 # 讀取整份sql腳本，回傳長文字，再使用sqlparse.format來移除註解後斷行，每行語句作為元素放入list，
                 # 接著逐行執行。然而，sqlparse.format()處理分號的邏輯並不嚴謹，
                 # 舉例而言，若腳本有STORED PROCEDURE，且CREATE PROCEDURE 函式名.....BEGIN下文中的語句有;符號，此時format()會把PROCEDURE切的太細碎，導致定義錯誤、執行錯誤。
-                
+
                 with open(file_path, mode="r") as f:
                     sql_content = f.read()
 
@@ -171,8 +171,8 @@
                 # 直接執行整份sql file中的SQL腳本且不用預先移除註解，適合DDL，因為有SQL injection風險故不建議用在insert/update。
                 from pymysql.contants import client.multi_statement
 
-                conn = pymysql.connect(host=, port=, user=, 
-                                        password=, database=,...., 
+                conn = pymysql.connect(host=, port=, user=,
+                                        password=, database=,....,
                                         client_flag=CLIENT.MULTI_STATEMENTS)  # 必須增加client_flag
                 cursor = conn.cursor()
                 cursor.execute(sql_content) # sql_content是一整份含有多個SQL語句的長文字腳本，當中的註解不會影響執行。
@@ -197,13 +197,13 @@
                         print(f"Error on inserting into table, Error msg: {e}")
                         if conn:
                             conn.rollback()
-                
+
                 @task
                 def task_a_func():
                     a_func()
                     return None
 
-                task_a_func() 
+                task_a_func()
             ```
         * 改善方式：
             ```
@@ -220,13 +220,13 @@
                             conn.rollback()
                         raise AirflowException("要raise才能讓Airflow捕捉有例外、並進入重試機制") # 方式1
                         raise AirflowFailException("要raise才能讓Airflow捕捉有例外且判定任務fail、不進入重試機制") #方式2
-                
+
                 @task
                 def task_a_func():
                     a_func()
                     return None
 
-                task_a_func() 
+                task_a_func()
             ```
         * 核心概念：Airflow重試機制的觸發主要依賴未處理的Exception來向上傳播，任何形式的 exception swallowing 都會讓任務假成功。如果一定要寫try-except的話就要避免這件事發生，要確保raise Exception; 不然就是移除程式碼中的try-except、完全仰賴airflow來捕捉所有例外與重試機制。事實上，官方推薦後者。
         * 最需要保留try-except的情境是，當你需要確保與資料庫的連線關閉，需要寫:

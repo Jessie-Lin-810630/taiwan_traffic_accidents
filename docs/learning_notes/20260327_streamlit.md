@@ -7,7 +7,7 @@
         http://localhost:8501 #8501是預設端口
     ```
     `切記，streamlit run時，會以使用終端機的當前工作目錄作為根目錄。`
-1. 
+1.
 ```
 # text-align: centered text
 # padding: padding
