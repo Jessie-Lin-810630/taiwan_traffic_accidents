@@ -3,6 +3,7 @@
 import pandas as pd
 
 from src.util.logger_crtx import get_logger
+from src.util.read_traffic_accident_file import read_traffic_accident_file
 from src.util.table_column_map import dim_lane_design_col_map
 
 logger = get_logger(__name__)
@@ -15,24 +16,14 @@ def t_dim_lane_design(csvfile_paths: list[str]) -> pd.DataFrame:
     :param csvfile_paths: 包含csv檔案路徑的列表，這些csv檔案是從政府資料開放平台爬取的交通事故資料。
     :return: 一個DataFrame，包含車道設計維度表的資料。
     """
+    if not csvfile_paths:
+        raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
+
     all_df = []
     for file_path in csvfile_paths:
         logger.info(f"正在處理csv檔案: {file_path}")
-        # 讀取csv檔案到DataFrame
-        df = pd.read_csv(file_path, encoding="utf-8", skipfooter=2, engine="python")
-
-        # 擷取需要的欄位
-        required_columns = [k for k in dim_lane_design_col_map.keys()]
-        df = df.loc[:, required_columns]
-
-        # 重新命名欄位
-        renamed_required_columns = [
-            dim_lane_design_col_map[k] for k in required_columns
-        ]
-        df.columns = renamed_required_columns
-
-        # 去空白
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+        # 讀取csv檔案、挑欄、改名、去空白
+        df = read_traffic_accident_file(file_path, dim_lane_design_col_map)
 
         # 去重
         single_df = df.drop_duplicates(

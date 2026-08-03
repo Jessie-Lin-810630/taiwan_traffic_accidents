@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.util.logger_crtx import get_logger
 from src.util.mysql_utils import get_table_from_sqlserver
+from src.util.read_traffic_accident_file import read_traffic_accident_file
 from src.util.table_column_map import fact_accident_human_col_origin_map
 
 logger = get_logger(__name__)
@@ -14,27 +15,15 @@ logger = get_logger(__name__)
 
 def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
     """S"""
+    if not csvfile_paths:
+        raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
+
     all_df = []
     for file_path in csvfile_paths:
         logger.info(f"正在處理csv檔案: {file_path}")
-        # 讀取csv檔案到DataFrame
-        df = pd.read_csv(file_path, encoding="utf-8", skipfooter=2, engine="python")
-
-        # 擷取需要的欄位
-        required_columns = [k for k in fact_accident_human_col_origin_map.keys()]
-        matched_columns = [m for m in required_columns if m in df.columns]
-        unmatched_columns = [u for u in required_columns if u not in df.columns]
-        df = df.loc[:, matched_columns]
-
-        # 初始化應存在但沒有存在的欄位，並先賦予None
-        for new_col in unmatched_columns:
-            df[new_col] = None
-
-        # 重新命名欄位
-        renamed_required_columns = [
-            fact_accident_human_col_origin_map[k] for k in required_columns
-        ]
-        df.columns = renamed_required_columns
+        # 讀取csv檔案、挑欄、改名、去空白
+        # 舊表頭沒有「共享經濟或外送平台的名稱」，該欄會是 NaN（ADR-0010）
+        df = read_traffic_accident_file(file_path, fact_accident_human_col_origin_map)
 
         # 清理發生日期
         df["accident_date"] = pd.to_datetime(
@@ -61,9 +50,6 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
         df["is_primary_party_sequence"] = None
         df["party_sequence"] = df["party_sequence"].astype("int64")
         df["is_primary_party_sequence"] = np.where(df["party_sequence"].eq(1), 1, 0)
-
-        # 去字串空白
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
         all_df.append(df)
         logger.info(f"成功讀取csv檔案: {file_path}。此輪得到列數: {len(df)}")

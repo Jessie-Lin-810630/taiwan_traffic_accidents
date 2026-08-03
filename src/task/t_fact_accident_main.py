@@ -5,6 +5,7 @@ import pandas as pd
 
 from src.util.logger_crtx import get_logger
 from src.util.mysql_utils import get_table_from_sqlserver
+from src.util.read_traffic_accident_file import read_traffic_accident_file
 from src.util.table_column_map import fact_accident_main_col_origin_map
 
 logger = get_logger(__name__)
@@ -12,21 +13,14 @@ logger = get_logger(__name__)
 
 def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
     """S"""
+    if not csvfile_paths:
+        raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
+
     all_df = []
     for file_path in csvfile_paths:
         logger.info(f"正在處理csv檔案: {file_path}")
-        # 讀取csv檔案到DataFrame
-        df = pd.read_csv(file_path, encoding="utf-8", skipfooter=2, engine="python")
-
-        # 擷取需要的欄位
-        required_columns = [k for k in fact_accident_main_col_origin_map.keys()]
-        df = df.loc[:, required_columns]
-
-        # 重新命名欄位
-        renamed_required_columns = [
-            fact_accident_main_col_origin_map[k] for k in required_columns
-        ]
-        df.columns = renamed_required_columns
+        # 讀取csv檔案、挑欄、改名、去空白
+        df = read_traffic_accident_file(file_path, fact_accident_main_col_origin_map)
 
         # 清理發生日期
         df["accident_date"] = pd.to_datetime(
@@ -50,9 +44,6 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
         # 清理經緯度
         df["longitude"] = df["longitude"].astype("float64")
         df["latitude"] = df["latitude"].astype("float64")
-
-        # 去空白
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
         all_df.append(df)
         logger.info(f"成功讀取csv檔案: {file_path}。此輪得到列數: {len(df)}")
