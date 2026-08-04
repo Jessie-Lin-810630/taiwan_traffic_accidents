@@ -16,7 +16,7 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
-from src.util.get_table_from_mysql_gcp import get_table_from_sqlserver
+from src.util.mysql_utils import get_table_from_sqlserver
 from src.util.request_weather_api import request_weather_api
 
 """========================定義TASK 1========================"""

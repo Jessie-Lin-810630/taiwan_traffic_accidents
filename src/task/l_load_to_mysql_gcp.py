@@ -14,9 +14,8 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
-from src.util.create_engine_conn_tomysql import get_conn_pymysql
 from src.util.create_weather_related_tables import create_weather_hist_table
-from src.util.get_table_from_mysql_gcp import get_table_from_sqlserver
+from src.util.mysql_utils import get_pymysql_conn_to_mysql, get_table_from_sqlserver
 
 
 def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.DataFrame:
@@ -325,7 +324,7 @@ def l_transform_and_load_to_mysql(
 
             # 6. 寫入資料表
             print(f"Inserting into MySQL TABLE {table_name}....")
-            conn = get_conn_pymysql(database)
+            conn = get_pymysql_conn_to_mysql(database)
             cursor = conn.cursor()
             cursor.executemany(dml_str, df_transformed.values.tolist())
             conn.commit()

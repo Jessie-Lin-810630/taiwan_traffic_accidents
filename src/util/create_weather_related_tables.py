@@ -7,7 +7,7 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
-from src.util.create_engine_conn_tomysql import get_engine_sqlalchemy
+from src.util.mysql_utils import get_engine_to_mysql
 
 
 def create_weather_hist_table(table_name: str, *, database: str | None = None) -> None:
@@ -15,10 +15,7 @@ def create_weather_hist_table(table_name: str, *, database: str | None = None) -
     in MySQL server (given by engine object) if the table is not exist.
     """
     # 準備與MySQL server的連線
-    if database:
-        engine = get_engine_sqlalchemy(database)
-    else:
-        engine = get_engine_sqlalchemy()
+    engine = get_engine_to_mysql(database)
 
     with engine.connect() as conn:
         ddl_text = text(f"""CREATE TABLE IF NOT EXISTS {table_name}(
