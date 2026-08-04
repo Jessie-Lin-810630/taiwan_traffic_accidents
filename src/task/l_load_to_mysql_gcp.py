@@ -1,12 +1,10 @@
 import hashlib
-import io
 import sys
 from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 from airflow.models import Variable
-from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.sdk import task
 
 # 1. 先確保opt/airflow有在sys.path中，以確保python interpreter能找到 ./utils下的模組或套件
@@ -15,6 +13,11 @@ if "/opt/airflow" not in sys.path:
 
 # 2. 在sys.path之後才進行import
 from src.task.create_weather_tables import create_weather_tables
+from src.task.e_crawler_weather_gcp_refactor import (
+    WEATHER_BUCKET,
+    weather_data_prefix,
+)
+from src.util import gcs_utils
 from src.util.mysql_utils import (
     get_engine_to_mysql,
     get_pymysql_conn_to_mysql,
@@ -218,19 +221,16 @@ def l_summary_report(target_year: int, upstream) -> str:
     :rtype: str
     """
     # 1. 找出該年份的所有Parquet之檔案路徑
-    gcs_hook = GCSHook(gcp_conn_id="google_cloud_default")  # 初始化
-    bucket_name = "taiwan_traffic_accidents_weather"
-    save_dir = f"weather_cache_final/{target_year}/data"
-    all_files = gcs_hook.list(bucket_name=bucket_name, prefix=save_dir)
-    all_files = [f for f in all_files if f.endswith(".parquet")]
+    save_dir = weather_data_prefix(target_year)
+    all_files = gcs_utils.list_parquet(WEATHER_BUCKET, save_dir)
 
     # 2. 引出總結報告
     print(f"============== Summary: {target_year} ==============")
     print(f"Year: {target_year}")
-    print(f"Storage path: {bucket_name}/{save_dir}")
+    print(f"Storage path: {WEATHER_BUCKET}/{save_dir}")
     print(f"Total Parquet files collected: {len(all_files)}")
     print("==============================================")
-    return str(bucket_name)
+    return WEATHER_BUCKET
 
 
 @task(
@@ -254,11 +254,8 @@ def l_transform_and_load_to_mysql(
     df_all_acc_loc = e_get_all_acc_geo(target_year, database=database)
 
     # 2. 找出該年份的所有Parquet之檔案路徑，如果沒找到檔案就不往下執行。
-    gcs_hook = GCSHook(gcp_conn_id="google_cloud_default")  # 初始化
-    bucket_name = "taiwan_traffic_accidents_weather"
-    save_dir = f"weather_cache_final/{target_year}/data"
-    all_files = gcs_hook.list(bucket_name=bucket_name, prefix=save_dir)
-    all_files = [f for f in all_files if f.endswith(".parquet")]
+    save_dir = weather_data_prefix(target_year)
+    all_files = gcs_utils.list_parquet(WEATHER_BUCKET, save_dir)
 
     if not all_files:
         print(f"No weather data found in {save_dir}")
@@ -282,8 +279,7 @@ def l_transform_and_load_to_mysql(
                 f"as batch No: {i // batch_size}"
             )
             for f in batch_files:
-                file_data = gcs_hook.download(bucket_name=bucket_name, object_name=f)
-                df_w_chunk = pd.read_parquet(io.BytesIO(file_data))
+                df_w_chunk = gcs_utils.read_parquet(WEATHER_BUCKET, f)
 
                 # 以防萬一如果E step出現存寫錯誤，這裡還可以檢查一次。
                 if "datetime_ISO8601" not in df_w_chunk.columns:

@@ -30,11 +30,12 @@ def test_get_logger_不覆寫既有的_root_handler():
 
 
 def test_util連線模組在無_airflow_的環境可匯入():
-    """三個 util 模組不得於匯入期依賴 airflow，否則 Cloud Run 與 pytest 會失敗。"""
+    """四個 util 模組不得於匯入期依賴 airflow，否則 Cloud Run 與 pytest 會失敗。"""
     for module_name in (
         "src.util.mysql_utils",
         "src.util.redis_utils",
         "src.util.crawling_utils",
+        "src.util.gcs_utils",
     ):
         assert importlib.import_module(module_name) is not None
 
@@ -45,6 +46,7 @@ def test_util連線模組不再持有_airflow_例外類別():
         "src.util.mysql_utils",
         "src.util.redis_utils",
         "src.util.crawling_utils",
+        "src.util.gcs_utils",
     ):
         module = importlib.import_module(module_name)
 

@@ -1,4 +1,3 @@
-import io
 import random
 import sys
 import time
@@ -8,7 +7,6 @@ from pathlib import Path
 import pandas as pd
 import pendulum
 from airflow.exceptions import AirflowException
-from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.sdk import task
 
 # 1. 先確保opt/airflow有在sys.path中，以確保python interpreter能找到 ./utils下的模組或套件
@@ -16,8 +14,33 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
+from src.util import gcs_utils
 from src.util.mysql_utils import get_table_from_sqlserver
 from src.util.request_weather_api import request_weather_api
+
+# 天氣觀測資料在 GCS 上的落點。bucket 與路徑組法是本 pipeline 的慣例，
+# 不屬於 gcs_utils —— 換一個 bucket 或換一套路徑，那支工具仍然成立。
+WEATHER_BUCKET = "taiwan_traffic_accidents_weather"
+
+
+def _year_prefix(target_year: int) -> str:
+    """該年度天氣資料在 GCS 上的根前綴。"""
+    return f"weather_cache_final/{target_year}"
+
+
+def _batch_object(target_year: int, batch_id: int) -> str:
+    """批次經緯度清單的暫存物件路徑。
+
+    這份暫存檔的存在理由是 Airflow 的 dynamic task mapping：
+    `expand()` 只適合傳純量，DataFrame 走 XCom 會過長，
+    因此以批號為鍵、把 DataFrame 放在 GCS 上交接。
+    """
+    return f"{_year_prefix(target_year)}/tmp/batch_no_{batch_id}.parquet"
+
+
+def weather_data_prefix(target_year: int) -> str:
+    """該年度天氣觀測結果的前綴。"""
+    return f"{_year_prefix(target_year)}/data"
 
 """========================定義TASK 1========================"""
 
@@ -106,17 +129,12 @@ def prep_batch_plan(
         + ".parquet"
     )
 
-    # 2. 宣告在GCS上存parquet的路徑名稱
-    gcs_hook = GCSHook(gcp_conn_id="google_cloud_default")  # 初始化
-    bucket_name = "taiwan_traffic_accidents_weather"
-    save_dir = f"weather_cache_final/{target_year}"
+    # 2. 查詢目前GCS的data路徑下面有幾份.parquet檔案，並存成set、可以減少後續找元素時的時間複雜度
+    print(f"Searching the existing files in {weather_data_prefix(target_year)}...")
+    files = gcs_utils.list_parquet(WEATHER_BUCKET, weather_data_prefix(target_year))
+    existing_files = {Path(f).name for f in files}
 
-    # 3. 查詢目前GCS的data路徑下面有幾份.parquet檔案，並存成set、可以減少後續找元素時的時間複雜度
-    print(f"Searching the existing files in {save_dir}...")
-    files = gcs_hook.list(bucket_name=bucket_name, prefix=f"{save_dir}/data")
-    existing_files = {Path(f).name for f in files if f.endswith(".parquet")}
-
-    # 4. 針對歷史年份，用~排除同名檔案。針對尚未結束的今年，不排除同名檔案。
+    # 3. 針對歷史年份，用~排除同名檔案。針對尚未結束的今年，不排除同名檔案。
     this_year = pendulum.now().year
     if target_year < this_year:
         df_needed = df_acc_uniq_loc[~df_acc_uniq_loc["file_name"].isin(existing_files)]
@@ -132,7 +150,7 @@ def prep_batch_plan(
             f"more 3 days of weather data since last saving."
         )
 
-    # 5. 制訂batch plan，並將每一batch的dataframe存到GCS的tmp路徑下，對應批號則存到batch plan變數。
+    # 4. 制訂batch plan，並將每一batch的dataframe存到GCS的tmp路徑下，對應批號則存到batch plan變數。
     batch_plan = []
 
     for i in range(0, len(df_needed), batch_size):
@@ -140,17 +158,12 @@ def prep_batch_plan(
         batch_id = i // batch_size
         df_a_batch["batch_id"] = batch_id
 
-        # 使用最穩定的 (io.BytesIO + engine='pyarrow')，避開pandas內部讀寫GCS可能產生的版本衝突
-        buffer = io.BytesIO()  # 製作一個二進位制的物件(BytesIO)，存在RAM、而非disk，照樣可以用file-like-object的方式使用它、但是速度會比較快
-        # 將df_a_batch轉成parquet的二進位制並寫入記憶體。 # to_parquet()依賴pyarrow引擎，後者要額外安裝
-        df_a_batch.to_parquet(buffer, index=True, engine="pyarrow")
-        buffer.seek(0)  # 把檔案指標、移回檔案開頭
-        gcs_hook.upload(
-            bucket_name=bucket_name,
-            object_name=f"{save_dir}/tmp/batch_no_{batch_id}.parquet",
-            data=buffer.getvalue(),  # parquet資料透過data傳入，預設會覆蓋同名檔案。
-            # .getvalue()會把io.BytesIO緩衝區裡所有已經寫進去的 bytes，打包成一個bytes物件
-            mime_type="application/octet-stream",
+        # index=True 是本呼叫點特有的：暫存檔要能還原成與切片當下相同的 DataFrame。
+        gcs_utils.write_parquet(
+            WEATHER_BUCKET,
+            _batch_object(target_year, batch_id),
+            df_a_batch,
+            index=True,
         )
 
         # 存下對應批號
@@ -193,17 +206,10 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str | None:
     :rtype: str | None
     """
     print(f"Processing batch no {batch_id}......")
-    # 1. 宣告在GCS上存parquet的路徑名稱
-    gcs_hook = GCSHook(gcp_conn_id="google_cloud_default")  # 初始化
-    bucket_name = "taiwan_traffic_accidents_weather"
-    save_dir = f"weather_cache_final/{target_year}"
-
-    # 2. 從GCS上打開df_one_batch
-    file_data = gcs_hook.download(
-        bucket_name=bucket_name,
-        object_name=f"{save_dir}/tmp/batch_no_{batch_id}.parquet",
+    # 1. 從GCS上打開df_one_batch
+    df_one_batch = gcs_utils.read_parquet(
+        WEATHER_BUCKET, _batch_object(target_year, batch_id)
     )
-    df_one_batch = pd.read_parquet(io.BytesIO(file_data))
     df_one_batch["lat_round"] = df_one_batch["lat_round"].astype("float64").round(2)
     df_one_batch["lon_round"] = df_one_batch["lon_round"].astype("float64").round(2)
 
@@ -270,22 +276,15 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str | None:
                 lat_s = str(lat_round_lst[j]).replace(".", "-")
                 lon_s = str(lon_round_lst[j]).replace(".", "-")
                 file_name = (
-                    f"{save_dir}/data/cralwer_batch_{batch_id}_{lat_s}_{lon_s}.parquet"
+                    f"{weather_data_prefix(target_year)}/"
+                    f"cralwer_batch_{batch_id}_{lat_s}_{lon_s}.parquet"
                 )
 
                 # 存成 Parquet 較節省空間(直接存到GCS上)，印出進度
                 try:
                     print(f"Saving the {(j + 1)}/{len(data)} file....")
 
-                    buffer = io.BytesIO()
-                    df_a_loc_hourly.to_parquet(buffer, index=False, engine="pyarrow")
-                    buffer.seek(0)
-                    gcs_hook.upload(
-                        bucket_name=bucket_name,
-                        object_name=file_name,
-                        data=buffer.getvalue(),  # parquet資料透過data傳入，預設會覆蓋同名檔案
-                        mime_type="application/octet-stream",
-                    )
+                    gcs_utils.write_parquet(WEATHER_BUCKET, file_name, df_a_loc_hourly)
                 except Exception as e:
                     failed_files += 1  # 失敗就累計1
                     print(f"Failed to save the file!\nError msg:{e}")
@@ -307,4 +306,4 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str | None:
 
     # 7. sleep緩解server負擔
     time.sleep(random.uniform(5, 10))
-    return str(bucket_name)
+    return WEATHER_BUCKET
