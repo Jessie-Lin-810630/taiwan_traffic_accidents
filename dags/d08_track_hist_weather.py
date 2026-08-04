@@ -8,7 +8,7 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
-from src.task.e_crawler_weather_gcp_refactor import (
+from src.task.e_crawling_weather import (
     e_crawler_weatherapi,
     e_get_uniq_acc_geo,
     prep_batch_plan,

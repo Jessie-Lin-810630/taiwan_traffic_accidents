@@ -13,7 +13,7 @@ if "/opt/airflow" not in sys.path:
 
 # 2. 在sys.path之後才進行import
 from src.task.create_weather_tables import create_weather_tables
-from src.task.e_crawler_weather_gcp_refactor import (
+from src.task.e_crawling_weather import (
     WEATHER_BUCKET,
     weather_data_prefix,
 )
