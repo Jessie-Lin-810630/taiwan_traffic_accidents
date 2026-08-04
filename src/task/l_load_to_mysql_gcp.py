@@ -15,6 +15,7 @@ if "/opt/airflow" not in sys.path:
 from src.task.create_weather_tables import create_weather_tables
 from src.task.e_crawling_weather import (
     WEATHER_BUCKET,
+    round_to_weather_grid,
     weather_data_prefix,
 )
 from src.util import gcs_utils
@@ -32,7 +33,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     :type target_year: int
     :param database: 要從MySQL哪一個資料庫查詢target_year車禍資料主表，如不指定，會從預設資料庫查詢
     :type database: str | None = None
-    :return: 將經緯度都進位至小數點後二位後得到的pandas DataFrame
+    :return: 將經緯度都進位至氣象網格後得到的pandas DataFrame
     :rtype: DataFrame
     """
     # 1. 指派要查詢的資料表名稱
@@ -62,9 +63,10 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     )
     # df_acc: ['accident_id', 'approx_accident_datetime', 'longitude', 'latitude']
 
-    # 4. 經緯度簡化 - 進位
-    df_acc["lat_round"] = df_acc["latitude"].astype("float64").round(2)
-    df_acc["lon_round"] = df_acc["longitude"].astype("float64").round(2)
+    # 4. 經緯度進位到氣象網格。必須與 e_get_uniq_acc_geo 用同一支函式，
+    # 否則下方 t_dataclr_weather_hist 的 merge 會一列都對不上（ADR-0012）。
+    df_acc["lat_round"] = round_to_weather_grid(df_acc["latitude"])
+    df_acc["lon_round"] = round_to_weather_grid(df_acc["longitude"])
 
     df_acc = df_acc.loc[
         :, ["accident_id", "lat_round", "lon_round", "approx_accident_datetime"]
@@ -88,7 +90,7 @@ def t_dataclr_weather_hist(
 
     :param df_weather_raw: 從OpenMeteo API下載下來的原始整年度天氣觀測資料，為dataframe
     :type df_weather_raw: pd.DataFrame
-    :param df_all_acc_loc: 描述每個車禍地點經緯度進位至小數點後二位的結果之dataframe
+    :param df_all_acc_loc: 描述每個車禍地點經緯度進位至氣象網格的結果之dataframe
     :type df_all_acc_loc: pd.DataFrame
     :return: 車禍事故日期時間相近的天氣觀測資料之dataframe，若沒有時間相近的天氣資料，
              則回傳empty dataframe
@@ -109,14 +111,14 @@ def t_dataclr_weather_hist(
         .str.replace(":00", ":00:00")
     )
 
-    # 2. 確保兩表的lat_round&lon_round型態一致
-    df_all_acc_loc["lat_round"] = df_all_acc_loc["lat_round"].astype("float64").round(2)
-    df_all_acc_loc["lon_round"] = df_all_acc_loc["lon_round"].astype("float64").round(2)
-    df_weather_raw["latitude_round"] = (
-        df_weather_raw["latitude_round"].astype("float64").round(2)
+    # 2. 兩邊的經緯度都走同一支進位函式，下方的 merge 才接得起來（ADR-0012）
+    df_all_acc_loc["lat_round"] = round_to_weather_grid(df_all_acc_loc["lat_round"])
+    df_all_acc_loc["lon_round"] = round_to_weather_grid(df_all_acc_loc["lon_round"])
+    df_weather_raw["latitude_round"] = round_to_weather_grid(
+        df_weather_raw["latitude_round"]
     )
-    df_weather_raw["longitude_round"] = (
-        df_weather_raw["longitude_round"].astype("float64").round(2)
+    df_weather_raw["longitude_round"] = round_to_weather_grid(
+        df_weather_raw["longitude_round"]
     )
 
     # # debug區

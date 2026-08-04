@@ -42,8 +42,36 @@ WEATHER_VARIABLES = [
     "wind_gusts_10m",
 ]
 
+# 經緯度進位的網格大小，單位為度（ADR-0012）。
+GRID_STEP = 0.05
+
+# 請求時一律指定的高程，單位為公尺（ADR-0012）。
+# 不指定的話 OpenMeteo 會依每個座標各自的海拔調整氣溫，
+# 同一個網格內的座標因此拿到不同的值，進位就失去意義。
+FIXED_ELEVATION_M = 10
+
 # 寫入失敗率超過此比例即視為該批次失敗。
 MAX_FAILURE_RATE = 0.2
+
+
+def round_to_weather_grid(series: pd.Series) -> pd.Series:
+    """將經緯度進位到氣象網格（ADR-0012）。
+
+    事故資料與天氣資料最後要 merge，兩邊的經緯度都必須用這支函式算出來。
+    只要有一邊用了別的算法，join 會一列都對不上，而且不會報錯。
+
+    末尾的 `.round(2)` 是必要的：`24.13 / 0.05` 取整後乘回去，浮點運算可能
+    得到 `24.150000000000002`，而 hash 是拿字串算的（見 `t_dataclr_weather_hist`），
+    多出來的尾數會讓兩邊算出不同的 hash。
+
+    Parameters:
+        series (pandas.Series): 原始的經度或緯度。
+
+    Returns:
+        pandas.Series: 進位到 `GRID_STEP` 網格後的值。
+    """
+    scaled = series.astype("float64") / GRID_STEP
+    return (scaled.round() * GRID_STEP).round(2)
 
 
 def _year_prefix(target_year: int) -> str:
@@ -127,6 +155,8 @@ def _request_weather_api(
             429 刻意不重試（見 `_should_retry`）。
         requests.exceptions.Timeout | ConnectionError: 重試耗盡後原樣拋出。
     """
+    # 高程要逐地點指定，數量必須與經緯度一致（ADR-0012）
+    location_count = len(lats_str.split(","))
     params = {
         "latitude": lats_str,
         "longitude": lons_str,
@@ -134,6 +164,7 @@ def _request_weather_api(
         "end_date": end_date,
         "hourly": variables,
         "timezone": "Asia/Taipei",
+        "elevation": ",".join([str(FIXED_ELEVATION_M)] * location_count),
     }
 
     logger.info(f"向 OpenMeteo 請求 {start_date} ~ {end_date} 的天氣觀測")
@@ -192,7 +223,7 @@ def e_get_uniq_acc_geo(
     :type target_year: int
     :param database: 要從MySQL哪一個資料庫查詢target_year車禍資料主表，如不指定，會從預設資料庫查詢
     :type database: str | None = None
-    :return: 將經緯度都進位至小數點後二位，再去掉重複出現的經緯度組合之後的pandas DataFrame
+    :return: 將經緯度都進位至氣象網格，再去掉重複出現的經緯度組合之後的pandas DataFrame
     :rtype: DataFrame
     """
     # 1. 指派要查詢的資料表名稱
@@ -212,12 +243,12 @@ def e_get_uniq_acc_geo(
         f"Finished the query! The fetched result contains columns: \n {df_acc.columns}"
     )
 
-    # 4. 經緯度簡化 - 進位
-    # 在WGS84座標系下，經緯度差0.01度大約相當於緯度方向1110公尺、經度方向約1000公尺。
-    # 一般天氣模型網格解析度為1~20公里，0.01度差異(約1公里)在同一網格內，對觀測結果影響很小。
-    # 所以將經緯度統一進位到小數點後2位，減少API請求次數與後續要處理的資料量。
-    df_acc["lat_round"] = df_acc["latitude"].astype("float64").round(2)
-    df_acc["lon_round"] = df_acc["longitude"].astype("float64").round(2)
+    # 4. 經緯度進位到氣象網格
+    # OpenMeteo 背後的模式把地表切成約 0.07 度的格子，同一格內的座標拿到的是
+    # 同一份觀測值。進位到比它略細的 0.05 度，可讓落在同一格的事故共用一次
+    # API 請求，大幅減少請求次數（ADR-0012）。
+    df_acc["lat_round"] = round_to_weather_grid(df_acc["latitude"])
+    df_acc["lon_round"] = round_to_weather_grid(df_acc["longitude"])
 
     # 5. 進位後可能發生相同經緯度組合，故保險起見做去重
     df_acc_uniq_loc = df_acc.drop_duplicates(["lat_round", "lon_round"])
@@ -347,8 +378,8 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
     df_one_batch = gcs_utils.read_parquet(
         WEATHER_BUCKET, _batch_object(target_year, batch_id)
     )
-    df_one_batch["lat_round"] = df_one_batch["lat_round"].astype("float64").round(2)
-    df_one_batch["lon_round"] = df_one_batch["lon_round"].astype("float64").round(2)
+    df_one_batch["lat_round"] = round_to_weather_grid(df_one_batch["lat_round"])
+    df_one_batch["lon_round"] = round_to_weather_grid(df_one_batch["lon_round"])
 
     # 3. Calling for API時，需要將經緯度以字串形式傳入參數，故遍歷df_one_batch把經度、緯度分別組合出一組字串
     lat_round_lst = [str(lat_num) for lat_num in df_one_batch["lat_round"]]
