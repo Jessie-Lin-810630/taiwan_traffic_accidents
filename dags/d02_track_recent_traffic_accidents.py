@@ -1,23 +1,26 @@
-from datetime import timedelta, datetime, timezone
-from airflow.sdk import dag, task, TaskGroup
 import os
-from src.task.e_crawling_traffic_accident import (e_crawling_latest_traffic_accident,
-                                                  this_year_A1_url, this_year_A2_url,
-                                                  headers)
+from datetime import datetime, timedelta, timezone
 
-from src.task.t_dim_accident_type import t_dim_accident_type
-from src.task.t_dim_lane_design import t_dim_lane_design
-from src.task.t_dim_road_design import t_dim_road_design
-from src.task.t_fact_accident_human import t_fact_accident_human
-from src.task.t_fact_accident_env import t_fact_accident_env
-from src.task.t_fact_accident_main import t_fact_accident_main
+from airflow.sdk import dag, task
 
+from src.task.e_crawling_traffic_accident import (
+    e_crawling_latest_traffic_accident,
+    headers,
+    this_year_A1_url,
+    this_year_A2_url,
+)
 from src.task.l_dim_accident_type import l_dim_accident_type
 from src.task.l_dim_lane_design import l_dim_lane_design
 from src.task.l_dim_road_design import l_dim_road_design
-from src.task.l_fact_accident_human import l_fact_accident_human
 from src.task.l_fact_accident_env import l_fact_accident_env
+from src.task.l_fact_accident_human import l_fact_accident_human
 from src.task.l_fact_accident_main import l_fact_accident_main
+from src.task.t_dim_accident_type import t_dim_accident_type
+from src.task.t_dim_lane_design import t_dim_lane_design
+from src.task.t_dim_road_design import t_dim_road_design
+from src.task.t_fact_accident_env import t_fact_accident_env
+from src.task.t_fact_accident_human import t_fact_accident_human
+from src.task.t_fact_accident_main import t_fact_accident_main
 
 # Default arguments for the DAG
 default_args = {

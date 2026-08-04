@@ -61,7 +61,7 @@ def round_to_weather_grid(series: pd.Series) -> pd.Series:
     只要有一邊用了別的算法，join 會一列都對不上，而且不會報錯。
 
     末尾的 `.round(2)` 是必要的：`24.13 / 0.05` 取整後乘回去，浮點運算可能
-    得到 `24.150000000000002`，而 hash 是拿字串算的（見 `t_dataclr_weather_hist`），
+    得到 `24.150000000000002`，而 hash 是拿字串算的（見 `t_fact_hourly_weather`），
     多出來的尾數會讓兩邊算出不同的 hash。
 
     Parameters:
@@ -229,16 +229,18 @@ def e_get_uniq_acc_geo(
     # 1. 指派要查詢的資料表名稱
     table_name = "fact_accident_main"
 
-    # 2. 撰寫DQL語句
+    # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
     query = f"""SELECT longitude, latitude
                     FROM {table_name}
-                        WHERE YEAR(accident_datetime) = {target_year}
+                        WHERE YEAR(accident_datetime) = :target_year
                             GROUP BY longitude, latitude;
             """
 
     # 3. 從MySQL server取得資料表
     logger.info(f"Querying TABLE {table_name} FROM DATABASE {database}...")
-    df_acc = get_table_from_sqlserver(query, database=database)
+    df_acc = get_table_from_sqlserver(
+        query, {"target_year": target_year}, database=database
+    )
     logger.info(
         f"Finished the query! The fetched result contains columns: \n {df_acc.columns}"
     )
@@ -262,6 +264,70 @@ def e_get_uniq_acc_geo(
     )
 
     return df_acc_uniq_loc
+
+
+def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.DataFrame:
+    """Extract: 讀取車禍資料主表，取得每一筆事故的進位座標與整點化時間。
+
+    與 `e_get_uniq_acc_geo()` 的差別在**粒度**：那支去重後只回傳觀測點清單
+    （約數百列），供決定要向 API 請求哪些地點；本函式一筆事故一列
+    （約數十萬列），供 `t_fact_hourly_weather()` 與天氣資料 merge。
+
+    兩支都呼叫 `round_to_weather_grid()`，merge 才接得起來。
+
+    :param target_year: 要從MySQL資料表查詢哪一年份的車禍資料主表
+    :type target_year: int
+    :param database: 要從MySQL哪一個資料庫查詢target_year車禍資料主表，如不指定，會從預設資料庫查詢
+    :type database: str | None = None
+    :return: 將經緯度都進位至氣象網格後得到的pandas DataFrame
+    :rtype: DataFrame
+    """
+    # 1. 指派要查詢的資料表名稱
+    table_name = "fact_accident_main"
+
+    # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
+    query = f"""SELECT accident_id,
+                        TIMESTAMP(date(accident_datetime),
+                                    SEC_TO_TIME(ROUND(
+                                                        TIME_TO_SEC(
+                                                            time(accident_datetime)) / 3600
+                                                        ) * 3600
+                                                )
+                                  ) as `approx_accident_datetime`,
+                        longitude,
+                        latitude
+                    FROM {table_name}
+                        WHERE YEAR(accident_datetime) = :target_year
+                        GROUP BY longitude, latitude, accident_id, accident_datetime;
+            """
+
+    # 3. 從MySQL server取得資料表
+    logger.info(f"Querying TABLE {table_name} FROM DATABASE {database}...")
+    df_acc = get_table_from_sqlserver(
+        query, {"target_year": target_year}, database=database
+    )
+    logger.info(
+        f"Finished the query! The fetched result contains columns: \n {df_acc.columns}"
+    )
+    # df_acc: ['accident_id', 'approx_accident_datetime', 'longitude', 'latitude']
+
+    # 4. 經緯度進位到氣象網格。必須與 e_get_uniq_acc_geo 用同一支函式，
+    # 否則 t_fact_hourly_weather 的 merge 會一列都對不上（ADR-0012）。
+    df_acc["lat_round"] = round_to_weather_grid(df_acc["latitude"])
+    df_acc["lon_round"] = round_to_weather_grid(df_acc["longitude"])
+
+    df_acc = df_acc.loc[
+        :, ["accident_id", "lat_round", "lon_round", "approx_accident_datetime"]
+    ]
+
+    # 5. 轉換成str，與天氣側的 datetime_ISO8601 對得上
+    df_acc["approx_accident_datetime"] = df_acc["approx_accident_datetime"].astype(str)
+    logger.info(
+        f"FOR Year {target_year}: \nGot {len(df_acc)} locations "
+        f"from the TABLE {table_name} containing {len(df_acc)} accidents."
+    )
+
+    return df_acc
 
 
 """========================定義TASK 2========================"""
@@ -425,7 +491,7 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
 
         # 補回lat_round、lon_round，以便後續追溯這筆天氣資料是靠近哪一個事故地經緯度。
         # 刻意不用回應中的 latitude/longitude —— 那是網格中心座標，與事故端的值不同，
-        # 用它會讓下游 t_dataclr_weather_hist 的 merge 全部落空。
+        # 用它會讓下游 t_fact_hourly_weather 的 merge 全部落空。
         df_a_loc_hourly["latitude_round"] = float(lat_round_lst[j])
         df_a_loc_hourly["longitude_round"] = float(lon_round_lst[j])
 

@@ -1,7 +1,10 @@
+"""d07：抓取本年度至今的天氣觀測，並載入 MySQL。"""
+
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-from airflow.sdk import TaskGroup, dag
+from airflow.sdk import TaskGroup, dag, task
 
 # 1. 先確保opt/airflow有在sys.path中，以確保python interpreter能找到./tasks ./utils下的模組或套件
 if "/opt/airflow" not in sys.path:
@@ -13,7 +16,7 @@ from src.task.e_crawling_weather import (
     e_get_uniq_acc_geo,
     prep_batch_plan,
 )
-from src.task.l_load_to_mysql_gcp import l_summary_report, l_transform_and_load_to_mysql
+from src.task.l_fact_hourly_weather import l_fact_hourly_weather
 
 # Default arguments for the DAG
 default_args = {
@@ -36,20 +39,28 @@ default_args = {
     tags=["traffic", "weatherapi", "taskflow"],
 )
 def accident_weather_pipeline():
+    """串接本年度天氣 ETL：取觀測點 -> 制訂批次 -> 抓取 -> 清洗載入。"""
     this_year = 2026
+    database = os.getenv("MYSQL_DATABASE")
 
-    with TaskGroup(group_id=f"year_{this_year}") as year_group:
-        df = e_get_uniq_acc_geo(this_year, database="traffic_accidents")
+    @task(
+        retries=2,
+        retry_delay=timedelta(minutes=10),
+        execution_timeout=timedelta(hours=4),
+    )
+    def task_t_and_l_weather(target_year: int, database: str | None) -> None:
+        l_fact_hourly_weather(target_year, database=database, batch_size=50)
+
+    with TaskGroup(group_id=f"year_{this_year}"):
+        df = e_get_uniq_acc_geo(this_year, database=database)
         batches = prep_batch_plan(df, this_year, batch_size=50)
         # MappedOperator
         craw_done = e_crawler_weatherapi.partial(target_year=this_year).expand(
             batch_id=batches
         )
 
-        report_done = l_summary_report(target_year=this_year, upstream=craw_done)
-        load_done = l_transform_and_load_to_mysql(
-            target_year=this_year, database="traffic_accidents", upstream=report_done
-        )
+        load_done = task_t_and_l_weather(this_year, database)
+        craw_done >> load_done
 
 
 # Instantiate the DAG
