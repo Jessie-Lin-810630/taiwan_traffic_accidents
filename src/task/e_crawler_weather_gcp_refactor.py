@@ -40,8 +40,7 @@ def e_get_uniq_acc_geo(
     :rtype: DataFrame
     """
     # 1. 指派要查詢的資料表名稱
-    this_year = pendulum.now().year
-    table_name = "acfact_accident_main"
+    table_name = "fact_accident_main"
 
     # 2. 撰寫DQL語句
     query = f"""SELECT longitude, latitude

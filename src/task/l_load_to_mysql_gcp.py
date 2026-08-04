@@ -14,8 +14,12 @@ if "/opt/airflow" not in sys.path:
     sys.path.append("/opt/airflow")
 
 # 2. 在sys.path之後才進行import
-from src.util.create_weather_related_tables import create_weather_hist_table
-from src.util.mysql_utils import get_pymysql_conn_to_mysql, get_table_from_sqlserver
+from src.task.create_weather_tables import create_weather_tables
+from src.util.mysql_utils import (
+    get_engine_to_mysql,
+    get_pymysql_conn_to_mysql,
+    get_table_from_sqlserver,
+)
 
 
 def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.DataFrame:
@@ -262,7 +266,7 @@ def l_transform_and_load_to_mysql(
 
     # 3. 如果沒有建立過資料表則建立該表
     table_name = "fact_hourly_weather"
-    create_weather_hist_table(table_name, database=database)
+    create_weather_tables(get_engine_to_mysql(database))
 
     # 4. 分批讀取檔案、清理，避免記憶體爆炸或disk I/O壅塞
     try:
