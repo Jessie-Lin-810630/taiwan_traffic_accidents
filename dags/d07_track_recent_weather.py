@@ -1,16 +1,10 @@
 """d07：抓取本年度至今的天氣觀測，並載入 MySQL。"""
 
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 
 from airflow.sdk import TaskGroup, dag, task
 
-# 1. 先確保opt/airflow有在sys.path中，以確保python interpreter能找到./tasks ./utils下的模組或套件
-if "/opt/airflow" not in sys.path:
-    sys.path.append("/opt/airflow")
-
-# 2. 在sys.path之後才進行import
 from src.task.e_crawling_weather import (
     e_crawler_weatherapi,
     e_get_uniq_acc_geo,
@@ -44,6 +38,33 @@ def accident_weather_pipeline():
     database = os.getenv("MYSQL_DATABASE")
 
     @task(
+        retries=3,
+        retry_delay=timedelta(minutes=10),
+        execution_timeout=timedelta(minutes=30),
+    )
+    def task_e_get_uniq_acc_geo(target_year: int, database: str | None):
+        return e_get_uniq_acc_geo(target_year, database=database)
+
+    @task
+    def task_prep_batch_plan(
+        df_acc_unique_loc, target_year: int, batch_size: int
+    ) -> list[int]:
+        return prep_batch_plan(df_acc_unique_loc, target_year, batch_size)
+
+    @task(
+        pool="weather_api_pool",  # 需到UI進一步給值，指一次可以執行多少個同類task
+        retries=3,  # 如果出現except，最多再重試3次，總計每個task可跑4次
+        retry_delay=timedelta(minutes=20),  # 20分鐘後才重試
+        retry_exponential_backoff=True,  # 讓等待時間隨次數增加(指數退避)
+        max_retry_delay=timedelta(hours=2),  # 指數退避下，最長間隔2小時後重試
+        # 排除等待時間，如果執行總時間超過2小時，殺掉該task避免佔用pool資源
+        execution_timeout=timedelta(hours=2),
+        do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
+    )
+    def task_e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
+        return e_crawler_weatherapi(batch_id, target_year)
+
+    @task(
         retries=2,
         retry_delay=timedelta(minutes=10),
         execution_timeout=timedelta(hours=4),
@@ -52,10 +73,10 @@ def accident_weather_pipeline():
         l_fact_hourly_weather(target_year, database=database, batch_size=50)
 
     with TaskGroup(group_id=f"year_{this_year}"):
-        df = e_get_uniq_acc_geo(this_year, database=database)
-        batches = prep_batch_plan(df, this_year, batch_size=50)
+        df = task_e_get_uniq_acc_geo(this_year, database)
+        batches = task_prep_batch_plan(df, this_year, 50)
         # MappedOperator
-        craw_done = e_crawler_weatherapi.partial(target_year=this_year).expand(
+        craw_done = task_e_crawler_weatherapi.partial(target_year=this_year).expand(
             batch_id=batches
         )
 

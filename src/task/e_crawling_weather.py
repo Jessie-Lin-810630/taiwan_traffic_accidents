@@ -1,22 +1,15 @@
 """Extract 階段：向 OpenMeteo 取得事故地點的逐小時天氣觀測，落地為 GCS Parquet。"""
 
 import random
-import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pendulum
 import requests
-from airflow.sdk import task
 from tenacity import retry, retry_if_exception, stop_after_attempt
 
-# 1. 先確保opt/airflow有在sys.path中，以確保python interpreter能找到 ./utils下的模組或套件
-if "/opt/airflow" not in sys.path:
-    sys.path.append("/opt/airflow")
-
-# 2. 在sys.path之後才進行import
 from src.util import gcs_utils
 from src.util.crawling_utils import RETRY_ATTEMPTS, RETRY_WAIT, is_transient
 from src.util.logger_crtx import get_logger
@@ -27,6 +20,10 @@ logger = get_logger(__name__)
 # 天氣觀測資料在 GCS 上的落點。bucket 與路徑組法是本 pipeline 的慣例，
 # 不屬於 gcs_utils —— 換一個 bucket 或換一套路徑，那支工具仍然成立。
 WEATHER_BUCKET = "taiwan_traffic_accidents_weather"
+
+# 算「今年」與「三天前」都用台北時區 —— 與 API 請求的 timezone 參數一致。
+# 容器沒有設定 TZ，若取本地時間會是 UTC，與要來的資料差 8 小時。
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 # OpenMeteo 歷史天氣 API（站台專屬，因此留在本模組而非 crawling_utils）。
 # 參考文件：https://open-meteo.com/en/docs/historical-weather-api
@@ -209,11 +206,6 @@ def _request_weather_api(
 """========================定義TASK 1========================"""
 
 
-@task(
-    retries=3,
-    retry_delay=timedelta(minutes=10),
-    execution_timeout=timedelta(minutes=30),
-)
 def e_get_uniq_acc_geo(
     target_year: int, *, database: str | None = None
 ) -> pd.DataFrame:
@@ -333,7 +325,6 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
 """========================定義TASK 2========================"""
 
 
-@task
 def prep_batch_plan(
     df_acc_unique_loc: pd.DataFrame, target_year: int, batch_size=50
 ) -> list[int]:
@@ -369,7 +360,7 @@ def prep_batch_plan(
     existing_files = {Path(f).name for f in files}
 
     # 3. 針對歷史年份，用~排除同名檔案。針對尚未結束的今年，不排除同名檔案。
-    this_year = pendulum.now().year
+    this_year = datetime.now(TAIPEI).year
     if target_year < this_year:
         df_needed = df_acc_uniq_loc[~df_acc_uniq_loc["file_name"].isin(existing_files)]
         logger.info(
@@ -418,16 +409,6 @@ def prep_batch_plan(
 """ == == == == == == == == == == == ==定義TASK 3 == == == == == == == == == == == =="""
 
 
-@task(
-    pool="weather_api_pool",  # 需到UI進一步給值，指一次可以執行多少個同類task
-    retries=3,  # 如果出現except，最多再重試3次，總計task group中，每個task可跑4次
-    retry_delay=timedelta(minutes=20),  # 20分鐘後才重試
-    retry_exponential_backoff=True,  # 讓等待時間隨次數增加(指數退避)
-    max_retry_delay=timedelta(hours=2),  # 指數退避下，最長間隔2小時後重試
-    # 排除等待時間，如果執行總時間超過2小時，殺掉該task避免佔用pool資源
-    execution_timeout=timedelta(hours=2),
-    do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
-)
 def e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
     """Extract: 讀取批號對應的經緯度清單，向 OpenMeteo 請求該年度天氣並落地 GCS。
 
@@ -456,8 +437,8 @@ def e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
     # 3. Calling for API時，需要傳入日期區間作為參數，故準備start_date＆end_date兩字串
     start_date = f"{target_year}-01-01"
     # 如果當年度尚未結束，但end_date設定為yyyy-12-31再作為參數傳入的話，API會回傳None，因此需要彈性指派end_date的值
-    today = pendulum.now()
-    previous_day = today.subtract(days=3).format("YYYY-MM-DD")
+    today = datetime.now(TAIPEI)
+    previous_day = (today - timedelta(days=3)).strftime("%Y-%m-%d")
     this_year = today.year
     end_date = f"{target_year}-12-31" if this_year > target_year else f"{previous_day}"
 
