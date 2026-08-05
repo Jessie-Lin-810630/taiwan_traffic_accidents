@@ -84,7 +84,7 @@ def main() -> None:
     st.info("""
             💡 **數據判讀須知**：
             1. **空間範圍**：本頁指標與排名【包含夜市方圓 500 公尺核心區內所有類型車禍】，並已剔除重疊事故紀錄。
-            2. **時間完整性**：⚠️ **2026 Q1 數據目前僅統計至 1 月份**。季度比較趨勢之落差係因資料統計週期不完整所致，非實際事故量大幅下降，判讀時請留意。
+            2. **時間完整性**：⚠️ **2026 Q3 數據目前僅統計至 7 月底**。季度比較趨勢之落差係因資料統計週期不完整所致，非實際事故量大幅下降，判讀時請留意。
             """)
 
     st.markdown(
@@ -155,8 +155,8 @@ def main() -> None:
         <div style="background-color: #f8fafc; border-left: 4px solid #94a3b8; padding: 16px; border-radius: 0 8px 8px 0; margin-bottom: 25px; margin-top: 10px;">
             <div style="font-weight: bold; color: #475569; margin-bottom: 8px; font-size: 14px;">💡 什麼是 PDI 危險指數？</div>
             <ul style="font-size: 13px; color: #475569; line-height: 1.7; margin-bottom: 0; padding-left: 20px;">
-                <li><b>PDI公式：</b> ((死亡×10 + 受傷×2) / 該區總事故數) × 1.5</li>
-                <li><b>分母對齊：</b> 除以總件數標準化風險，消除規模誤差。</li>
+                <li><b>單件 PDI：</b> (死亡×10 + 受傷×2) × 時段權重（17 時起至凌晨為 1.5，其餘為 1.0）</li>
+                <li><b>本頁數值：</b> 該範圍內所有事故的單件 PDI 平均值，以「每一件事故」為單位標準化，消除規模誤差。</li>
                 <li><b>判定：</b> 數值越高代表一旦發生事故「非死即傷」機率越高。</li>
             </ul>
         </div>
@@ -422,12 +422,12 @@ def main() -> None:
 </div>"""
                     st.markdown(html_card, unsafe_allow_html=True)
 
-            st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
+            # st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
 
-            st.markdown(
-                f"<div style='font-size:16px; font-weight:bold; color:#1f2937; margin-bottom:10px;'>📊 各縣市 {mode} 現況排名總表</div>",
-                unsafe_allow_html=True,
-            )
+            # st.markdown(
+            #     f"<div style='font-size:16px; font-weight:bold; color:#1f2937; margin-bottom:10px;'>📊 各縣市 {mode} 現況排名總表</div>",
+            #     unsafe_allow_html=True,
+            # )
 
             full_rank_df = rank_df.sort_values(sort_col, ascending=False).reset_index(
                 drop=True
@@ -446,7 +446,7 @@ def main() -> None:
             )
             df_transposed.index = ["排名", f"{mode}"]
 
-            with st.container():
+            with st.expander("點擊查看各縣市 綜合危險指數 (PDI) 今年度排名總表"):
                 st.dataframe(df_transposed, width="content")
 
             st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
@@ -477,9 +477,6 @@ def main() -> None:
                 fill_value=0,
             )
 
-            # 計算每個年份的排名矩陣 (以欄 Column 進行獨立排名)
-            heatmap_rank = heatmap_data.rank(ascending=False, method="min")
-
             if region_filter == "全台":
                 target_regions = ["北部", "中部", "南部", "東部與東部離島", "其他離島"]
             else:
@@ -493,9 +490,8 @@ def main() -> None:
             available_cities = [c for c in valid_cities if c in heatmap_data.index]
 
             heatmap_data = heatmap_data.reindex(available_cities)
-            heatmap_rank = heatmap_rank.reindex(available_cities)
 
-            col_hm_left, col_hm_right = st.columns(2, gap="small")
+            col_hm_left, col_hm_right = st.columns([10, 0.1], gap="small")
 
             # 動態計算熱力圖高度，避免縣市太多時文字擠在一起
             matrix_height = max(250, len(heatmap_data) * 35)
@@ -513,14 +509,23 @@ def main() -> None:
                         z=heatmap_data.values,
                         x=heatmap_data.columns,
                         y=heatmap_data.index,
-                        colorscale="Blues",
+                        # 自訂 Blues：階與階之間的落差拉大，最深壓到 #2171b5 以提高層級鑑別度
+                        colorscale=[
+                            [0.00, "#f7fbff"],
+                            [0.20, "#d6e6f5"],
+                            [0.40, "#a9cce7"],
+                            [0.60, "#74a9d8"],
+                            [0.80, "#4585c4"],
+                            [1.00, "#2171b5"],
+                        ],
                         texttemplate="<b>%{z:,.2f}</b>"
                         if is_pdi_mode
                         else "<b>%{z:,.0f}</b>",
                         hovertemplate="年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.2f}<extra></extra>"
                         if is_pdi_mode
                         else "年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.0f}<extra></extra>",
-                        textfont=dict(size=14),
+                        # 中間調石板灰，深淺格子上都讀得到
+                        textfont=dict(size=14, color="#475569"),
                     )
                 )
 
@@ -537,39 +542,6 @@ def main() -> None:
 
                 st.plotly_chart(fig_heat_val, width="stretch")
 
-            with col_hm_right:
-                st.markdown(
-                    "<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>名次熱力圖 (全台 22 縣市比較)</div>",
-                    unsafe_allow_html=True,
-                )
-                fig_heat_rank = go.Figure(
-                    data=go.Heatmap(
-                        z=heatmap_rank.values,
-                        x=heatmap_rank.columns,
-                        y=heatmap_rank.index,
-                        colorscale="Blues_r",  # 反轉色系 (Blues_r)，讓數字越小(第1名)顏色越深
-                        texttemplate="<b>第 %{z:.0f} 名</b>",
-                        hovertemplate="年份: %{x}<br>縣市: %{y}<br>名次: 第 %{z:.0f} 名<extra></extra>",
-                        textfont=dict(size=14),
-                    )
-                )
-
-                fig_heat_rank.update_layout(
-                    height=matrix_height,
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    xaxis=dict(side="top", tickmode="linear", dtick=1),
-                    # 隱藏右側圖表的 Y 軸文字，避免重複
-                    yaxis=dict(
-                        categoryorder="array",
-                        categoryarray=available_cities[::-1],
-                        showticklabels=False,
-                    ),
-                )
-
-                st.plotly_chart(fig_heat_rank, width="stretch")
-
 
 if __name__ == "__main__":
     main()
-    # t = get_dynamic_national_data()
-    # print(t.head())
