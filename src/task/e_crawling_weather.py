@@ -224,7 +224,7 @@ def e_get_uniq_acc_geo(
     # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
     query = f"""SELECT longitude, latitude
                     FROM {table_name}
-                        WHERE YEAR(accident_datetime) = :target_year
+                        WHERE CAST(LEFT(accident_id, 4) AS SIGNED) = :target_year
                             GROUP BY longitude, latitude;
             """
 
@@ -276,21 +276,27 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     """
     # 1. 指派要查詢的資料表名稱
     table_name = "fact_accident_main"
+    table_name_to_join = "dim_accident_day"
 
     # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
-    query = f"""SELECT accident_id,
-                        TIMESTAMP(date(accident_datetime),
-                                    SEC_TO_TIME(ROUND(
-                                                        TIME_TO_SEC(
-                                                            time(accident_datetime)) / 3600
-                                                        ) * 3600
-                                                )
-                                  ) as `approx_accident_datetime`,
-                        longitude,
-                        latitude
-                    FROM {table_name}
-                        WHERE YEAR(accident_datetime) = :target_year
-                        GROUP BY longitude, latitude, accident_id, accident_datetime;
+    query = f"""SELECT t1.accident_id,
+                       concat(t2.accident_date,
+                              "T",
+                              (SEC_TO_TIME(ROUND(
+                                            TIME_TO_SEC(
+                                                time(t1.accident_time)
+                                                ) / 3600
+                                            ) * 3600
+                                        )
+                                )
+                            )  as `approx_accident_datetime`,
+                        t1.longitude,
+                        t1.latitude
+                    FROM {table_name} t1
+                        JOIN {table_name_to_join} t2 ON t1.day_id = t2.day_id
+                        WHERE YEAR(t2.accident_date) = :target_year
+                        GROUP BY t1.longitude, t1.latitude, t1.accident_id,
+                                 t2.accident_date, t1.accident_time;
             """
 
     # 3. 從MySQL server取得資料表
