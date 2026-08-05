@@ -54,14 +54,12 @@ def get_all_nightmarkets() -> pd.DataFrame:
         # df["adminDistrict"] = df["area_road"]
 
         # 處理附屬離島特例強制劃分
-        df["region"] = df["region"].where(
-            df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False), "東部與東部離島"
+        df.loc[df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False), "region"] = (
+            "東部與東部離島"
         )
-        df["region"] = df["nightmarket_name"].where(
-            df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False), "東部與東部離島"
-        )
-        # df.loc[df["adminDistrict"].str.contains("琉球|蘭嶼|綠島", na=False), "region"] = "東部與東部離島"
-        # df.loc[df["name"].str.contains("琉球|蘭嶼|綠島", na=False), "region"] = "東部與東部離島"
+        df.loc[
+            df["nightmarket_name"].str.contains("琉球|蘭嶼|綠島", na=False), "region"
+        ] = "東部與東部離島"
 
         # 剔除經緯度遺漏的髒資料 (正常來說不會有)
         df_all_nm = df.dropna(subset=["latitude", "longitude"], how="any")
