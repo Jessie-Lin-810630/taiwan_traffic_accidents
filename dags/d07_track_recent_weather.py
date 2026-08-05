@@ -27,7 +27,16 @@ default_args = {
     dag_id="d07_track_recent_weather",
     default_args=default_args,
     description="ETL process from requesting weather API for the weather data between 'January 01st~3-day-prior-to-today' until loading to MySQL database",
-    schedule="00 07 */3 * *",  # 每月1、4、7、10、13、16日的07點00分執行一次
+    # 每月 3 號與 18 號的 07:00 各執行一次。
+    #
+    # 3 號：上個月的最後一天剛進入 API 查得到的範圍（延遲 3 天），該月因此
+    #       判定為抓完整，整月抓一次後永不重抓。額度約 1,277（時限額的 26%）。
+    # 18 號：上個月已排除，只抓當月 1～15 日。額度約 630（13%）。
+    #
+    # 頻率的依據是**事故資料兩週發布一次** —— 天氣是 inner join 掛在事故上的，
+    # 抓得比事故新沒有意義。原本每 3 天一次會把同一個月重抓 10 次，
+    # 其中 9 次的資料都會被下一次覆蓋，一年白花約 6 萬次額度。
+    schedule="00 07 3,18 * *",
     start_date=datetime(2026, 2, 25, 5, 00, tzinfo=timezone(offset=timedelta(hours=8))),
     catchup=False,
     tags=["traffic", "weatherapi", "taskflow"],
@@ -48,7 +57,7 @@ def accident_weather_pipeline():
     @task
     def task_prep_batch_plan(
         df_acc_unique_loc, target_year: int, batch_size: int
-    ) -> list[int]:
+    ) -> list[dict]:
         return prep_batch_plan(df_acc_unique_loc, target_year, batch_size)
 
     @task(
@@ -61,13 +70,17 @@ def accident_weather_pipeline():
         execution_timeout=timedelta(hours=2),
         do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
     )
-    def task_e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
-        return e_crawler_weatherapi(batch_id, target_year)
+    def task_e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
+        return e_crawler_weatherapi(batch_id, target_year, month)
 
     @task(
         retries=2,
         retry_delay=timedelta(minutes=10),
         execution_timeout=timedelta(hours=4),
+        # 抓取被額度打斷是這個設計的正常狀態，不是故障 —— 首次回補必然跨多次
+        # DAG run 才抓得完。已經落地 GCS 的資料要先進 MySQL，不必等全部抓完
+        # （ADR-0013 決策六）。
+        trigger_rule="all_done",
     )
     def task_t_and_l_weather(target_year: int, database: str | None) -> None:
         l_fact_hourly_weather(target_year, database=database, batch_size=50)
@@ -75,10 +88,9 @@ def accident_weather_pipeline():
     with TaskGroup(group_id=f"year_{this_year}"):
         df = task_e_get_uniq_acc_geo(this_year, database)
         batches = task_prep_batch_plan(df, this_year, 50)
-        # MappedOperator
-        craw_done = task_e_crawler_weatherapi.partial(target_year=this_year).expand(
-            batch_id=batches
-        )
+        # MappedOperator。一個 mapped instance = 一批觀測點 × 一個月，
+        # 參數由 prep_batch_plan() 以 dict 排好（ADR-0013 決策四）。
+        craw_done = task_e_crawler_weatherapi.expand_kwargs(batches)
 
         load_done = task_t_and_l_weather(this_year, database)
         craw_done >> load_done

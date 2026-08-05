@@ -44,7 +44,7 @@ def l_fact_hourly_weather(
 
     # 2. 找出該年份的所有 Parquet 檔案路徑
     save_dir = weather_data_prefix(target_year)
-    all_files = gcs_utils.list_parquet(WEATHER_BUCKET, save_dir)
+    all_files = gcs_utils.list_parquet(bucket=WEATHER_BUCKET, prefix=save_dir)
 
     # 上游的抓取 task 跑完卻一個檔案都沒有，是故障，不是「正常但空」（ADR-0003）
     if not all_files:
@@ -72,7 +72,7 @@ def l_fact_hourly_weather(
 
         df_list = []
         for f in batch_files:
-            df_w_chunk = gcs_utils.read_parquet(WEATHER_BUCKET, f)
+            df_w_chunk = gcs_utils.read_parquet(bucket=WEATHER_BUCKET, object_name=f)
 
             # 這些 Parquet 是抓取階段自己寫的，缺欄代表當時寫壞了。
             # 少量損壞容忍，整體比例過高則在迴圈結束後 raise。

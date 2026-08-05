@@ -27,7 +27,10 @@ default_args = {
     dag_id="d08_track_hist_weather",
     default_args=default_args,
     description="ETL process from requesting weather API for the weather data between 'January 01st~December 31th' until loading to MySQL database",
-    schedule=None,
+    # 四年回補約 61,320 次額度，受日限額 10,000 約束，需連續跑約 7 天。
+    # 每天 09:00 讓 d07（07:00）先取走當年度要的額度，剩下的才給回補。
+    # 補完之後手動 pause 掉這支 DAG —— 它是一次性工作（ADR-0013 決策七）。
+    schedule="00 09 * * *",
     start_date=datetime(2026, 2, 25, 5, 00, tzinfo=timezone(offset=timedelta(hours=8))),
     catchup=False,
     tags=["traffic", "weatherapi", "taskflow"],
@@ -49,7 +52,7 @@ def accident_weather_pipeline():
     @task
     def task_prep_batch_plan(
         df_acc_unique_loc, target_year: int, batch_size: int
-    ) -> list[int]:
+    ) -> list[dict]:
         return prep_batch_plan(df_acc_unique_loc, target_year, batch_size)
 
     @task(
@@ -62,13 +65,15 @@ def accident_weather_pipeline():
         execution_timeout=timedelta(hours=2),
         do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
     )
-    def task_e_crawler_weatherapi(batch_id: int, target_year: int) -> str:
-        return e_crawler_weatherapi(batch_id, target_year)
+    def task_e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
+        return e_crawler_weatherapi(batch_id, target_year, month)
 
     @task(
         retries=2,
         retry_delay=timedelta(minutes=10),
         execution_timeout=timedelta(hours=4),
+        # 回補必然跨多天才抓得完，已落地 GCS 的資料要先進 MySQL（ADR-0013 決策六）
+        trigger_rule="all_done",
     )
     def task_t_and_l_weather(target_year: int, database: str | None) -> None:
         l_fact_hourly_weather(target_year, database=database, batch_size=50)
@@ -81,14 +86,11 @@ def accident_weather_pipeline():
             batches = task_prep_batch_plan.override(
                 task_id=f"task_prep_batch_plan_{year}"
             )(df, year, 50)
-            # MappedOperator
-            craw_done = (
-                task_e_crawler_weatherapi.override(
-                    task_id=f"task_e_crawler_weatherapi_{year}"
-                )
-                .partial(target_year=year)
-                .expand(batch_id=batches)
-            )
+            # MappedOperator。一個 mapped instance = 一批觀測點 × 一個月，
+            # 參數由 prep_batch_plan() 以 dict 排好（ADR-0013 決策四）。
+            craw_done = task_e_crawler_weatherapi.override(
+                task_id=f"task_e_crawler_weatherapi_{year}"
+            ).expand_kwargs(batches)
 
             load_done = task_t_and_l_weather.override(
                 task_id=f"task_t_and_l_weather_{year}"
