@@ -230,8 +230,8 @@ def main():
         <div style="background-color: #f8fafc; border-left: 4px solid #94a3b8; padding: 12px 16px; border-radius: 0 8px 8px 0; margin-bottom: 20px; margin-top: 10px;">
             <div style="font-weight: bold; color: #334155; margin-bottom: 6px; font-size: 13px;">💡 什麼是 PDI 危險指數？</div>
             <ul style="font-size: 12.5px; color: #475569; line-height: 1.6; margin-bottom: 0; padding-left: 18px;">
-                <li>PDI公式： ((死亡×10 + 受傷×2) / 該區總事故數) × 1.5</li>
-                <li>分母對齊： 除以總件數標準化風險，消除規模誤差。</li>
+                <li>單件 PDI： (死亡×10 + 受傷×2) × 時段權重（17 時起至凌晨為 1.5，其餘為 1.0）</li>
+                <li>本頁數值： 該範圍內所有事故的單件 PDI 平均值，以「每一件事故」為單位標準化，消除規模誤差。</li>
                 <li>判定： 數值越高代表一旦發生事故「非死即傷」機率越高。</li>
             </ul>
         </div>
