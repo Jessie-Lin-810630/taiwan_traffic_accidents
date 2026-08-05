@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from redis.exceptions import RedisError
 
 import src.task.core.c_data_service as ds
 import src.task.core.c_ui as ui
@@ -49,74 +50,72 @@ CITY_ORDER = [
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_real_city_data():
-    """讀取全台夜市周邊事故總表，補上區域與季別標籤。"""
-    try:
-        df = get_cache("market:national_master_df")
-        if df is not None and not df.empty:
-            df = df.copy()
+    """讀取全台夜市周邊事故總表，補上區域與季別標籤。
 
-            # 【去重複機制】防止跨夜市重疊區域的事故被重複計算
-            if "accident_id" in df.columns:
-                df = df.drop_duplicates(subset=["accident_id"])
+    快取「故障」與「未命中」語意分離（ADR-0003）：前者由 get_cache 拋
+    RedisError 交呼叫端處理，後者才回傳空表。
+    """
+    df = get_cache("market:national_master_df")
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-            df["accident_date"] = pd.to_datetime(df["accident_date"])
-            df["year_quarter"] = (
-                df["accident_date"].dt.year.astype(str)
-                + " Q"
-                + df["accident_date"].dt.quarter.astype(str)
-            )
-            df["city"] = df["nightmarket_city"]
+    df = df.copy()
 
-            df = df[
-                (df["city"].notna())
-                & (df["city"].astype(str).str.strip() != "")
-                & (df["city"] != "None")
-            ]
+    # 【去重複機制】防止跨夜市重疊區域的事故被重複計算
+    if "accident_id" in df.columns:
+        df = df.drop_duplicates(subset=["accident_id"])
 
-            # 將花東及外島皆對應到「東部與東部離島」
-            region_map = {
-                "臺北市": "北部",
-                "新北市": "北部",
-                "基隆市": "北部",
-                "桃園市": "北部",
-                "新竹市": "北部",
-                "新竹縣": "北部",
-                "宜蘭縣": "北部",
-                "臺中市": "中部",
-                "苗栗縣": "中部",
-                "彰化縣": "中部",
-                "南投縣": "中部",
-                "雲林縣": "中部",
-                "臺南市": "南部",
-                "高雄市": "南部",
-                "嘉義市": "南部",
-                "嘉義縣": "南部",
-                "屏東縣": "南部",
-                "花蓮縣": "東部與東部離島",
-                "臺東縣": "東部與東部離島",
-                "澎湖縣": "離島",
-                "金門縣": "離島",
-                "連江縣": "離島",
-            }
-            df["region"] = df["city"].map(region_map).fillna("其他")
+    df["accident_date"] = pd.to_datetime(df["accident_date"])
+    df["year_quarter"] = (
+        df["accident_date"].dt.year.astype(str)
+        + " Q"
+        + df["accident_date"].dt.quarter.astype(str)
+    )
+    df["city"] = df["nightmarket_city"]
 
-            # 加入附屬離島（蘭嶼、綠島、小琉球）的獨立區域劃分邏輯，將其歸入「東部與東部離島」
-            # 夜市主檔的行政區欄位是 area_road（不是 AdminDistrict），比照 c_data_service 用關鍵字比對
-            df_market = ds.get_all_nightmarkets()
-            if not df_market.empty and "area_road" in df_market.columns:
-                admin_map = df_market.set_index("nightmarket_name")[
-                    "area_road"
-                ].to_dict()
-                df["area_road"] = df["nightmarket_name"].map(admin_map)
-                mask_islands = df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False)
-                df.loc[mask_islands, "region"] = "東部與東部離島"
+    df = df[
+        (df["city"].notna())
+        & (df["city"].astype(str).str.strip() != "")
+        & (df["city"] != "None")
+    ]
 
-            return df
-    except Exception as e:
-        # 前端不再往上拋，例外在此停止傳播，故帶 exc_info=True（ADR-0003）
-        logger.error(f"讀取 market:national_master_df 失敗: {e}", exc_info=True)
-        st.error(f"Redis 讀取失敗: {e}")
-    return pd.DataFrame()
+    # 將花東及外島皆對應到「東部與東部離島」
+    region_map = {
+        "臺北市": "北部",
+        "新北市": "北部",
+        "基隆市": "北部",
+        "桃園市": "北部",
+        "新竹市": "北部",
+        "新竹縣": "北部",
+        "宜蘭縣": "北部",
+        "臺中市": "中部",
+        "苗栗縣": "中部",
+        "彰化縣": "中部",
+        "南投縣": "中部",
+        "雲林縣": "中部",
+        "臺南市": "南部",
+        "高雄市": "南部",
+        "嘉義市": "南部",
+        "嘉義縣": "南部",
+        "屏東縣": "南部",
+        "花蓮縣": "東部與東部離島",
+        "臺東縣": "東部與東部離島",
+        "澎湖縣": "離島",
+        "金門縣": "離島",
+        "連江縣": "離島",
+    }
+    df["region"] = df["city"].map(region_map).fillna("其他")
+
+    # 加入附屬離島（蘭嶼、綠島、小琉球）的獨立區域劃分邏輯，將其歸入「東部與東部離島」
+    # 夜市主檔的行政區欄位是 area_road（不是 AdminDistrict），比照 c_data_service 用關鍵字比對
+    df_market = ds.get_all_nightmarkets()
+    if not df_market.empty and "area_road" in df_market.columns:
+        admin_map = df_market.set_index("nightmarket_name")["area_road"].to_dict()
+        df["area_road"] = df["nightmarket_name"].map(admin_map)
+        mask_islands = df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False)
+        df.loc[mask_islands, "region"] = "東部與東部離島"
+
+    return df
 
 
 # 動態風險評級函數
@@ -140,7 +139,15 @@ def get_risk_level(val, benchmark):
 
 def main():
     """繪製各縣市夜市事故比較分析頁。"""
-    df_market = ds.get_all_nightmarkets()
+    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
+    try:
+        df_market = ds.get_all_nightmarkets()
+    except Exception:
+        # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+        logger.error("資料服務讀取失敗", exc_info=True)
+        st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
+        st.stop()
+
     ui.render_sidebar(df_market)
 
     st.markdown(
@@ -177,9 +184,20 @@ def main():
     2. 時間完整性：⚠️ 2026 Q3 數據目前僅統計至 7 月底。季度比較趨勢之落差係因資料統計週期不完整所致，非實際事故量大幅下降，判讀時請留意。
     """)
 
-    df_raw = get_real_city_data()
+    try:
+        df_raw = get_real_city_data()
+    except RedisError:
+        # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+        # 前者拋 RedisError，後者才會回傳空表。
+        logger.error("全台總表快取讀取失敗", exc_info=True)
+        st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
+        st.stop()
+
     if df_raw.empty:
-        st.warning("無數據可供分析。")
+        # aggregate_national_master 寫在 dags/d06_precompute_to_redis.py
+        st.warning(
+            "⚠️ 無法取得全台總表，請確認 Airflow 的 `aggregate_national_master` 排程是否已執行完成。"
+        )
         return
 
     # 切割為雙欄寬版配置

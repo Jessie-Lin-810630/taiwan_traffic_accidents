@@ -2,7 +2,7 @@ name: Deploy-Streamlit-to-Cloud-Run
 
 on:
   push:
-    branches: 
+    branches:
       - main # 當代碼推送到main時觸發
     paths-ignore:      # 忽略以下路徑的變動
       - '**.md'        # 所有 Markdown 文件
@@ -64,4 +64,5 @@ jobs:
             --set-env-vars="REDIS_HOST=10.140.0.14" \
             --set-env-vars="REDIS_PORT=${{ secrets.REDIS_PORT }}" \
             --set-env-vars="REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}" \
+            --set-env-vars="GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" \
             --set-env-vars="PYTHONPATH=/app"

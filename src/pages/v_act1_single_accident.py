@@ -11,6 +11,7 @@ import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
+from redis.exceptions import RedisError
 from streamlit_folium import st_folium
 
 import src.task.core.c_data_service as ds
@@ -26,8 +27,6 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dotenv_path = os.path.join(current_dir, "..", ".env")
 load_dotenv(dotenv_path=parent_dotenv_path, override=True)
 
-if not os.getenv("GROQ_API_KEY"):
-    st.error("❌找不到 GROQ_API_KEY，請檢查 .env 檔案是否在正確位置。")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 st.set_page_config(layout="wide", page_title="單一夜市事故AI分析", page_icon="📊")
@@ -59,31 +58,29 @@ def normalize_accident_columns(df):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_single_market_redis(lat, lon, radius_km):
-    """讀取該夜市 3 km 快取包裹，再裁切成指定半徑內的事故。"""
-    try:
-        cache_key = f"traffic:nearby_v12:{lat:.4f}_{lon:.4f}_3.0_all_sample"
-        result = get_cache(cache_key)
+    """讀取該夜市 3 km 快取包裹，再裁切成指定半徑內的事故。
 
-        if result is not None:
-            df = pd.DataFrame()
-            if isinstance(result, tuple) and len(result) >= 1:
-                df = result[0]
-            elif isinstance(result, pd.DataFrame):
-                df = result
+    快取「故障」與「未命中」語意分離（ADR-0003）：前者由 get_cache 拋
+    RedisError 交呼叫端處理，後者才回傳空表。
+    """
+    cache_key = f"traffic:nearby_v12:{lat:.4f}_{lon:.4f}_3.0_all_sample"
+    result = get_cache(cache_key)
 
-            if not df.empty:
-                distances = ds.haversine_distance(
-                    lat, lon, df["latitude"].values, df["longitude"].values
-                )
-                df_filtered = df[distances <= radius_km]
-                return normalize_accident_columns(df_filtered)
+    if isinstance(result, tuple) and len(result) >= 1:
+        df = result[0]
+    elif isinstance(result, pd.DataFrame):
+        df = result
+    else:
+        return pd.DataFrame()
 
-    except Exception:
-        logger.error(
-            f"Redis 讀取失敗，cache key: traffic:nearby_v12:{lat:.4f}_{lon:.4f}_3.0_all_sample",
-            exc_info=True,
-        )
-    return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
+
+    distances = ds.haversine_distance(
+        lat, lon, df["latitude"].values, df["longitude"].values
+    )
+    df_filtered = df[distances <= radius_km]
+    return normalize_accident_columns(df_filtered)
 
 
 def main():
@@ -273,9 +270,19 @@ def main():
 
         radius_km = radius_m / 1000.0
         with st.spinner(f"正在載入 {sel_market} 周邊資料..."):
-            df_raw = get_single_market_redis(
-                target_market["lat"], target_market["lon"], radius_km
-            )
+            try:
+                df_raw = get_single_market_redis(
+                    target_market["lat"], target_market["lon"], radius_km
+                )
+            except RedisError:
+                # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+                # 前者拋 RedisError，後者才會回傳空表。
+                logger.error(
+                    f"夜市周邊事故快取讀取失敗：{sel_market}",
+                    exc_info=True,
+                )
+                st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
+                st.stop()
 
         if df_raw.empty:
             st.error("⚠️ 該區域無事故資料，請嘗試擴大半徑。")
@@ -578,25 +585,32 @@ def main():
 
         if st.button("✨ 立即生成分析報告", type="primary", use_container_width=True):
             with st.spinner("AI 正在解讀地圖與數據..."):
-                st.session_state.ai_report_text = get_ai_analysis(
-                    target_market["MarketName"],
-                    total_count,
-                    local_pdi,
-                    dead_count,
-                    hurt_count,
-                    top_cause_str,
-                    peak_hour_str,
-                    rain_ratio,
-                    dark_ratio,
-                    wet_ratio,
-                    risky_loc,
-                )
+                try:
+                    st.session_state.ai_report_text = get_ai_analysis(
+                        target_market["MarketName"],
+                        total_count,
+                        local_pdi,
+                        dead_count,
+                        hurt_count,
+                        top_cause_str,
+                        peak_hour_str,
+                        rain_ratio,
+                        dark_ratio,
+                        wet_ratio,
+                        risky_loc,
+                    )
+                except Exception:
+                    # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+                    logger.error(
+                        f"AI 分析報告生成失敗：{target_market['MarketName']}",
+                        exc_info=True,
+                    )
+                    st.session_state.ai_report_text = ""
+                    st.error("⛔ AI 服務暫時無法使用，請稍後再試或聯繫維運人員。")
 
         if st.session_state.get("ai_report_text"):
-            st.markdown(
-                f"<div style='margin-top:15px; font-size:13.5px; color:#334155; line-height:1.7;'>{st.session_state.ai_report_text}</div>",
-                unsafe_allow_html=True,
-            )
+            # AI 回傳的是不可信內容，一律以 Markdown 渲染，不得走 unsafe_allow_html
+            st.markdown(st.session_state.ai_report_text)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -619,10 +633,17 @@ def get_ai_analysis(
     wet,
     risky_loc,
 ):
-    """把該夜市的統計數據包成 prompt，交給 Groq 生成防護建議。"""
-    try:
-        client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        prompt = f"""
+    """把該夜市的統計數據包成 prompt，交給 Groq 生成防護建議。
+
+    例外一律往上拋，由呼叫端（前端邊界）決定如何降級（ADR-0003）。
+    """
+    api_key = os.getenv("GROQ_API_KEY")
+    # 必填設定在真正要用的那一刻驗證，避免缺設定被下游的認證錯誤掩蓋（ADR-0008）
+    if not api_key:
+        raise ValueError("未設定 GROQ_API_KEY，請檢查環境變數設置")
+
+    client = Groq(api_key=api_key)
+    prompt = f"""
         你是一個交通專家。請分析「{market_name}」數據（總字數限制150字內）。
         數據：總事故{total}件、PDI指數{pdi:.2f}、死亡{dead}、受傷{hurt}。榜首肇因：{top_cause}。尖峰：{peak_hour}點。
         環境：雨天{rain:.1f}%、昏暗{dark:.1f}%、路濕{wet:.1f}%。
@@ -636,17 +657,14 @@ def get_ai_analysis(
         5. 安全總結標語。
         格式：請用 Markdown 條列式，語氣專業，每次生成的內容，請固定都用 - 並且字體大小要相同。
         """
-        res = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile",
-        )
-        content = res.choices[0].message.content
+    res = client.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}],
+        model="llama-3.3-70b-versatile",
+    )
+    content = res.choices[0].message.content
 
-        # 將連續單一換行取代為雙換行，確保 Streamlit 渲染出正確段落
-        content = re.sub(r"(?<!\n)\n(?!\n)", "\n\n", content)
-        return content
-    except Exception as e:
-        return f"⚠️ AI 暫時無法使用：{str(e)}"
+    # 將連續單一換行取代為雙換行，確保 Streamlit 渲染出正確段落
+    return re.sub(r"(?<!\n)\n(?!\n)", "\n\n", content)
 
 
 if __name__ == "__main__":
