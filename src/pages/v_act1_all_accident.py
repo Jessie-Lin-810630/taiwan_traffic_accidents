@@ -491,56 +491,51 @@ def main() -> None:
 
             heatmap_data = heatmap_data.reindex(available_cities)
 
-            col_hm_left, col_hm_right = st.columns([10, 0.1], gap="small")
-
             # 動態計算熱力圖高度，避免縣市太多時文字擠在一起
             matrix_height = max(250, len(heatmap_data) * 35)
 
-            with col_hm_left:
-                st.markdown(
-                    f"<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>數值熱力圖 ({mode})</div>",
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f"<div style='text-align: center; font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 5px;'>數值熱力圖 ({mode})</div>",
+                unsafe_allow_html=True,
+            )
 
-                # Plotly 熱力圖
-                # 利用顏色深淺呈現各縣市歷年的指標變化。colorscale='Blues' 數值越大顏色越深
-                fig_heat_val = go.Figure(
-                    data=go.Heatmap(
-                        z=heatmap_data.values,
-                        x=heatmap_data.columns,
-                        y=heatmap_data.index,
-                        # 自訂 Blues：階與階之間的落差拉大，最深壓到 #2171b5 以提高層級鑑別度
-                        colorscale=[
-                            [0.00, "#f7fbff"],
-                            [0.20, "#d6e6f5"],
-                            [0.40, "#a9cce7"],
-                            [0.60, "#74a9d8"],
-                            [0.80, "#4585c4"],
-                            [1.00, "#2171b5"],
-                        ],
-                        texttemplate="<b>%{z:,.2f}</b>"
-                        if is_pdi_mode
-                        else "<b>%{z:,.0f}</b>",
-                        hovertemplate="年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.2f}<extra></extra>"
-                        if is_pdi_mode
-                        else "年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.0f}<extra></extra>",
-                        # 中間調石板灰，深淺格子上都讀得到
-                        textfont=dict(size=14, color="#475569"),
-                    )
+            # Plotly 熱力圖
+            # 利用顏色深淺呈現各縣市歷年的指標變化。colorscale='Blues' 數值越大顏色越深
+            fig_heat_val = go.Figure(
+                data=go.Heatmap(
+                    z=heatmap_data.values,
+                    x=heatmap_data.columns,
+                    y=heatmap_data.index,
+                    # 自訂 Blues：階與階之間的落差拉大，最深壓到 #2171b5 以提高層級鑑別度
+                    colorscale=[
+                        [0.00, "#f7fbff"],
+                        [0.20, "#d6e6f5"],
+                        [0.40, "#a9cce7"],
+                        [0.60, "#74a9d8"],
+                        [0.80, "#4585c4"],
+                        [1.00, "#2171b5"],
+                    ],
+                    texttemplate="<b>%{z:,.2f}</b>"
+                    if is_pdi_mode
+                    else "<b>%{z:,.0f}</b>",
+                    hovertemplate="年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.2f}<extra></extra>"
+                    if is_pdi_mode
+                    else "年份: %{x}<br>縣市: %{y}<br>數值: %{z:,.0f}<extra></extra>",
+                    # 中間調石板灰，深淺格子上都讀得到
+                    textfont=dict(size=14, color="#475569"),
                 )
+            )
 
-                fig_heat_val.update_layout(
-                    height=matrix_height,
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    xaxis=dict(
-                        side="top", tickmode="linear", dtick=1
-                    ),  # 把 X 軸(年份)移到上方
-                    yaxis=dict(
-                        categoryorder="array", categoryarray=available_cities[::-1]
-                    ),
-                )
+            fig_heat_val.update_layout(
+                height=matrix_height,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(
+                    side="top", tickmode="linear", dtick=1
+                ),  # 把 X 軸(年份)移到上方
+                yaxis=dict(categoryorder="array", categoryarray=available_cities[::-1]),
+            )
 
-                st.plotly_chart(fig_heat_val, width="stretch")
+            st.plotly_chart(fig_heat_val, width="stretch")
 
 
 if __name__ == "__main__":
