@@ -2,14 +2,12 @@
 
 import os
 import re
-import sys
 
 import altair as alt
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from dotenv import load_dotenv
 from groq import Groq
 from redis.exceptions import RedisError
 from streamlit_folium import st_folium
@@ -22,12 +20,8 @@ from src.util.redis_utils import get_cache, set_cache
 
 logger = get_logger(__name__)
 
-load_dotenv()
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dotenv_path = os.path.join(current_dir, "..", ".env")
-load_dotenv(dotenv_path=parent_dotenv_path, override=True)
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# .env 由 mysql_utils / redis_utils 的模組層 load_dotenv() 載入，分頁不重複載入；
+# 路徑一律以專案根為基準，不從 __file__ 推算（ADR-0007）。
 
 st.set_page_config(layout="wide", page_title="單一夜市事故AI分析", page_icon="📊")
 
