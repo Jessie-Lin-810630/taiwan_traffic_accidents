@@ -38,17 +38,12 @@ def render_sidebar(df_market):
 
     st.sidebar.page_link("app.py",  label="首頁", icon="🏠")
     # 側邊欄結構
-    st.sidebar.markdown("## 數據揭密")
+    st.sidebar.markdown("#### 車禍與夜市關聯性分析")
     st.sidebar.page_link("pages/v_act1_all_accident.py", label="全台夜市事故總體檢", icon="🗺️")
-    # st.sidebar.page_link("pages/v_act1_city_accident.py", label="縣市安全對標與趨勢", icon="🏙️")
-    # st.sidebar.page_link("pages/v_act1_single_accident.py", label="單一夜市 AI 深度診斷", icon="🔍")
-    # st.sidebar.markdown("## 化數據為行動")
-    # st.sidebar.page_link("pages/v_act2_policy.py", label="夜市周遭 - 修法前後分析研究", icon="⚖️")
-    # st.sidebar.page_link("pages/v_act2_tableau.py", label="全國區域 - 修法前後分析研究", icon="📈")
-    # st.sidebar.page_link("pages/v_act2_avoid.py", label="友善步行導航路線", icon="🧭")
-    # st.sidebar.markdown("### 持續開發中")
-    # st.sidebar.page_link("pages/v_act3_chat.py", label="AI交通小幫手", icon="💬")
-    # st.sidebar.page_link("pages/v_act3_policy_impact.py", label="政策成效初版", icon="⚖️")
+    st.sidebar.page_link("pages/v_act1_city_accident.py", label="縣市安全對標與趨勢", icon="🏙️")
+    st.sidebar.page_link("pages/v_act1_single_accident.py", label="單一夜市 AI 深度診斷", icon="🔍")
+    st.sidebar.markdown("#### 無標的夜市下之車禍分析")
+    st.sidebar.page_link("pages/v_act2_tableau.py", label="全國區域 - 修法前後分析研究", icon="📈")
 
     # 預設地圖圖層的開關狀態
     layers = {"traffic_heat": True,
@@ -177,7 +172,9 @@ def build_map(is_overview, target_market: dict, layers: dict,
                 dt_date = getattr(r, "accident_date", None)
                 dt_time = getattr(r, "accident_time", None)
                 dt_date_str = dt_date.strftime("%Y-%m-%d") if pd.notnull(dt_date) else "未知日期"
-                dt_time_str = dt_time.strftime("%H:%M:%S") if pd.notnull(dt_time) else "未知時間"
+                # accident_time 在 MySQL 是 TIME、讀進來是 Timedelta（沒有 strftime），
+                # 用 str() 取尾段可同時吃 Timedelta、Timestamp 與 datetime.time
+                dt_time_str = str(dt_time).split()[-1] if pd.notnull(dt_time) else "未知時間"
                 dt_str = dt_date_str + " " + dt_time_str
 
                 popup_text = f"一般事故<br>{dt_str}<br>{cause}<br>傷:{i_count}"
@@ -199,7 +196,9 @@ def build_map(is_overview, target_market: dict, layers: dict,
                 dt_date = getattr(r, "accident_date", None)
                 dt_time = getattr(r, "accident_time", None)
                 dt_date_str = dt_date.strftime("%Y-%m-%d") if pd.notnull(dt_date) else "未知日期"
-                dt_time_str = dt_time.strftime("%H:%M:%S") if pd.notnull(dt_time) else "未知時間"
+                # accident_time 在 MySQL 是 TIME、讀進來是 Timedelta（沒有 strftime），
+                # 用 str() 取尾段可同時吃 Timedelta、Timestamp 與 datetime.time
+                dt_time_str = str(dt_time).split()[-1] if pd.notnull(dt_time) else "未知時間"
                 dt_str = dt_date_str + " " + dt_time_str
 
                 popup_text = f"🚨 死亡事故<br>{dt_str}<br>{cause}<br>死:{d_count} 傷:{i_count}"

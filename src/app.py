@@ -105,18 +105,19 @@ def main():
     # 排中間容器，以下分成上1、上2、中1、中2、中3、下層區塊
     with col_main:  # "with 容器變數" 用以往內塞入元素
         # --- 上1區塊：Hero 視覺與大標題 ---
-        st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(
             """
                         <div style="text-align: center;">
                             <h1 style='color: #0f172a; font-size: 3.2rem; font-weight: 900; margin-bottom: 0px;'>
-                                夜市行人<span style='color: #ef4444;'>地獄</span>❗❓數據揭露的真相
+                                你的生活離<span style='color: #ef4444;'>行人地獄</span>有多遠❗❓<br>
+                                <p>
+                                數據揭露的真相
+                                </p>
                             </h1>
                         </div>
                     """,
             unsafe_allow_html=True,
         )
-        st.markdown("<br>", unsafe_allow_html=True)
 
         # 緊接著再由左而右切出三個儀表板
         m1, m2, m3 = st.columns(
@@ -161,15 +162,7 @@ def main():
             unsafe_allow_html=True,
         )
 
-        c1, c2, c3, c4 = st.columns(4, gap="small")
-        with c4:
-            with st.container(
-                border=True
-            ):  # 在 c4 裡建立一個有邊框的卡片區塊，沒有這行，下面的文字會沒有邊界感。
-                st.markdown("<h4>🚶‍♂️ 夜市行人</h4>", unsafe_allow_html=True)
-                st.write(
-                    "掌握目前位置周邊的事故熱點，避開高風險路段，獲取最安全的友善步行路線建議。"
-                )
+        c1, c2, c3 = st.columns(3, gap="small")
         with c3:
             with st.container(border=True):
                 st.markdown("<h4>🏡 在地居民</h4>", unsafe_allow_html=True)
@@ -178,7 +171,7 @@ def main():
                 )
         with c2:
             with st.container(border=True):
-                st.markdown("<h4>🏪 夜市攤商</h4>", unsafe_allow_html=True)
+                st.markdown("<h4>🏪 夜市攤商、行人</h4>", unsafe_allow_html=True)
                 st.write(
                     "診斷特定夜市的交通環境風險，提早防範塞車與事故發生，保障客流與日常進出貨安全。"
                 )
@@ -191,10 +184,10 @@ def main():
 
         # --- 中2層區塊：數據解密卡片 (3 欄並排) ---
         st.markdown(
-            "<h3 style='color: #1e293b; margin-bottom: 15px;'><span style='font-size: 1.4rem;'>🧭</span> 數據解密</h3>",
+            "<h3 style='color: #1e293b; margin-bottom: 15px;'><span style='font-size: 1.4rem;'>🧭</span> 車禍與夜市關聯性分析</h3>",
             unsafe_allow_html=True,
         )
-        row1_col1, row1_col2, row1_col3 = st.columns(3, gap="large")
+        row1_col1, row1_col2, row1_col3 = st.columns(3, gap="small")
 
         with row1_col1:
             with st.container(border=True):
@@ -209,7 +202,7 @@ def main():
         with row1_col2:
             with st.container(border=True):
                 st.markdown(
-                    "<div class='action-title'>🏙️ 我們的城市及格嗎？</div><div class='action-desc'>檢視跨縣市安全對標與年度進步率。</div>",
+                    "<div class='action-title'>🏙️ 我們的城市及格嗎？</div><div class='action-desc'>檢視跨縣市安全對標與年度進步率。<br><br></div>",
                     unsafe_allow_html=True,
                 )
                 if st.button("📊 縣市安全對標與趨勢", use_container_width=True):
@@ -227,58 +220,22 @@ def main():
 
         # --- 中3層區塊：化數據為行動 (3 欄並排) ---
         st.markdown(
-            "<h3 style='color: #1e293b; margin-bottom: 15px;'><span style='font-size: 1.4rem;'>🛡️</span> 化數據為行動</h3>",
+            "<h3 style='color: #1e293b; margin-bottom: 15px;'><span style='font-size: 1.4rem;'>🛡️</span>無標的夜市下之車禍分析</h3>",
             unsafe_allow_html=True,
         )
-        row2_col1, row2_col2, row2_col3 = st.columns(3, gap="large")
 
-        with row2_col1:
-            with st.container(border=True):
-                st.markdown(
-                    "<div class='action-title'>🏛️ 政策監督</div><div class='action-desc'>「停讓行人」新法真的有用嗎？檢視修法前後事故變化。</div>",
-                    unsafe_allow_html=True,
-                )
+        with st.container(border=True, width=285):
+            st.markdown(
+                "<div class='action-title'>🏛️ 政策監督</div><div class='action-desc'>「停讓行人」新法真的有用嗎？檢視修法前後事故變化。</div>",
+                unsafe_allow_html=True,
+            )
 
-                if st.button(
-                    "⚖️ 政策成效即時監控", type="primary", use_container_width=True
-                ):
-                    st.switch_page("pages/v_policy_impact.py")
-
-                if st.button(
-                    "📈 政策成效歷史數據 (Tableau)",
-                    type="secondary",
-                    use_container_width=True,
-                ):
-                    st.switch_page("pages/v_policy_tableau.py")
-        with row2_col2:
-            with st.container(border=True):
-                st.markdown(
-                    "<div class='action-title'>🚶 行人防護</div><div class='action-desc'>不只告訴您哪裡危險，更直接為您規劃避開熱點的安全路線。</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("🧭 友善步行導航路線", use_container_width=True):
-                    st.switch_page("pages/v_act3_avoid.py")
-        with row2_col3:
-            with st.container(border=True):
-                st.markdown(
-                    "<div class='action-title'>💡 智能決策</div><div class='action-desc'>結合 LLM 大語言模型，為您解答交通法規與安全疑難雜症。</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("💬 AI 交通小幫手", use_container_width=True):
-                    st.switch_page("pages/v_act6_chat.py")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # --- 下層區塊：註記數據來源 ---
-        # st.caption("""
-        #            **數據來源**
-        #             * **交通事故資料**: 政府資料開放平台（2021–2025）
-        #             * **氣象即時資料**: 中央氣象署 CWA OpenData
-        #             * **氣象歷史資料**: 中央氣象署 CODiS
-        #             * **夜市空間資料**: Google Maps Places API
-        #             * **地理圖資底圖**: OpenStreetMap (OSM)
-        #             """)
-        # st.markdown("<br><br>", unsafe_allow_html=True)
+            if st.button(
+                "📈 政策成效歷史數據",
+                type="secondary",
+                use_container_width=True,
+            ):
+                st.switch_page("pages/v_act2_tableau.py")
 
 
 if __name__ == "__main__":
