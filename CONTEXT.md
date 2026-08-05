@@ -21,7 +21,8 @@
 | **進位** | 把事故座標對到網格上，讓落在同一格的事故共用一次 API 請求。**不是四捨五入到小數點後幾位**，而是對到 `GRID_STEP` 的倍數 | `e_crawling_weather.round_to_weather_grid()`（ADR-0012） |
 | **觀測點** | 進位後的座標。一個觀測點對應 GCS 上的一份 Parquet，也是 `fact_hourly_weather` 的 `latitude_round` / `longitude_round` | `e_crawling_weather.py` 的 `lat_round` / `lon_round` |
 | **高程降尺度** | OpenMeteo 依座標海拔調整氣溫的機制。本專案**刻意停用它的預設行為**，改以固定高程請求，否則同一網格內的觀測值會不一致，進位就失去意義 | `FIXED_ELEVATION_M`（ADR-0012） |
-| **批次** | 一次 API 請求涵蓋的觀測點集合，預設 50 個。批次是 Airflow dynamic task mapping 的單位 | `prep_batch_plan()` 的 `batch_size` |
+| **批次** | 一次 API 請求涵蓋的**觀測點集合（預設 50 個）× 一個月**。批次是 Airflow dynamic task mapping 的單位，也是額度的計價單位 —— 一批的額度 = 觀測點數 × 該月天數 ÷ 25 | `prep_batch_plan()` 回傳的 dict（ADR-0013） |
+| **抓完整** | 一個月的觀測資料已抓齊、不必再重抓。判準是「該月最後一天已落在 API 查得到的範圍內」，**不是**「該月已經過去」—— OpenMeteo 的歷史資料延遲 3 天，用後者會讓每個月的最後 3 天永久缺失 | `is_month_complete()`（ADR-0013） |
 
 ### 為什麼「進位」與「觀測點」要分開講
 
