@@ -14,9 +14,8 @@ from streamlit_folium import st_folium
 
 import src.task.core.c_data_service as ds
 import src.task.core.c_ui as ui
-from src.task.core.c_db import get_night_markets_table
 from src.util.logger_crtx import get_logger
-from src.util.redis_utils import get_cache, set_cache
+from src.util.redis_utils import get_cache
 
 logger = get_logger(__name__)
 
@@ -89,54 +88,15 @@ def main():
         unsafe_allow_html=True,
     )
 
-    def get_all_nightmarkets():
-        # 與 c_data_service.get_all_nightmarkets() 的 market:list_all_auto_v3 分開，
-        cache_key = "market:list_all_page_v1"
-        cached = get_cache(cache_key)
-        if cached is not None:
-            df_cached = pd.DataFrame(cached)
-            if "AdminDistrict" in df_cached.columns and "Region" in df_cached.columns:
-                return df_cached
-        try:
-            # 連線一律走 get_engine_to_mysql()（ADR-0004），連線資訊由 .env 提供
-            df = get_night_markets_table()
-            if df.empty:
-                return df
-
-            # 資料清洗：確保經緯度為數值型別，並補上四層級分類標籤供前端下拉選單使用
-            df["lat"] = pd.to_numeric(df["latitude"], errors="coerce")
-            df["lon"] = pd.to_numeric(df["longitude"], errors="coerce")
-            df["MarketName"] = df["nightmarket_name"]
-
-            # 綁定四層級：
-            df["Region"] = df["region"].replace(
-                {"東部": "東部與離島", "離島": "東部與離島"}
-            )
-            df["City"] = df["city"]
-            df["AdminDistrict"] = df["district"]
-
-            # 處理附屬離島特例強制劃分
-            df.loc[
-                df["AdminDistrict"].str.contains("琉球|蘭嶼|綠島", na=False), "Region"
-            ] = "東部與離島"
-            df.loc[
-                df["nightmarket_name"].str.contains("琉球|蘭嶼|綠島", na=False),
-                "Region",
-            ] = "東部與離島"
-
-            # 向後相容舊程式碼
-            df["District"] = df["Region"]
-            df["District"] = df["Region"]
-
-            result = df.dropna(subset=["lat", "lon"])  # 剔除經緯度遺漏的髒資料
-            set_cache(cache_key, result.to_dict("records"), ttl=86400)
-            return result
-        except Exception:
-            logger.error("夜市清單讀取失敗", exc_info=True)
-            return pd.DataFrame()
-
+    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     with ui.page_timer():
-        df_market = get_all_nightmarkets()
+        try:
+            df_market = ds.get_nightmarkets_for_page_selector()
+        except Exception:
+            # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+            logger.error("夜市清單讀取失敗", exc_info=True)
+            st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
+            st.stop()
 
     st.session_state["show_accidents"] = True
     _, _, layers = ui.render_sidebar(df_market)

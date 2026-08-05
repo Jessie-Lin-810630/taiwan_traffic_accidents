@@ -82,6 +82,27 @@ def get_all_nightmarkets() -> pd.DataFrame:
     return df_all_nm
 
 
+# 由前端的夜市下拉選單調用
+def get_nightmarkets_for_page_selector() -> pd.DataFrame:
+    """在夜市主檔上補一組下拉選單用的別名欄位。
+
+    只做欄位改名，不另外讀 MySQL、也不另開快取 —— 主檔的讀取、清洗與
+    離島區域判定一律由 get_all_nightmarkets() 負責，避免兩份邏輯各自漂移。
+    """
+    df = get_all_nightmarkets().copy()
+    if df.empty:
+        return df
+
+    df["lat"] = df["latitude"]
+    df["lon"] = df["longitude"]
+    df["MarketName"] = df["nightmarket_name"]
+    df["Region"] = df["region"]
+    df["City"] = df["city"]
+    # 行政區取 district（xx區）。area_road 是街道地址，不是行政區
+    df["AdminDistrict"] = df["district"]
+    return df
+
+
 # 由dag_precompute調用
 def get_and_slice_nightmarkets_multibatches() -> list:  # fetch_and_split_markets原名
     """將夜市地理資訊補值後，拆成多個batch，分批存入Redis"""
