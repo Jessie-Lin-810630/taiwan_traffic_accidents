@@ -47,11 +47,10 @@ def get_region_or_cities(
         return "只能傳入city或region任一！"
 
     if city:
-        for k, v in cities_per_region:
-            if city in v:
-                return k
-        else:
-            return "找不到地區"
+        for a_region, cities in cities_per_region.items():
+            if city in cities:
+                return a_region
+        return "找不到地區"
     elif region:
         return cities_per_region.get(region, "")
     else:
