@@ -1,4 +1,9 @@
-"""DAG d06：預先計算夜市周邊事故統計並寫入 Redis 快取。"""
+"""DAG d06：預先計算夜市周邊事故統計並寫入 Redis 快取。
+
+每五天的 20 點跑一次。前端頁面只讀這裡算好的結果，不自行做重運算，因此本 DAG
+沒跑完的話，各分頁會顯示「請確認排程是否執行完成」。產出的快取存活 12 小時到
+10 天不等。
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -31,20 +36,58 @@ default_args = {
     tags=["traffic", "mart", "taskflow"],
 )
 def precompute_to_redis():
-    """分批計算夜市周邊事故，再彙總為全國主檔並存入 Redis。"""
+    """串接三個 task：切批次、逐批計算周邊事故、彙總成全臺總表。
+
+    中間那個 task 以動態展開的方式，每個批次各跑一次。
+    """
 
     @task
     def task_get_and_slice_nm_multibatches():
+        """把夜市清單切成批次存進 Redis，回傳各批的鍵。
+
+        Returns:
+            list[str]: 各批次在 Redis 中的鍵，供下游 task 展開與彙總。
+
+        Raises:
+            RedisError: 讀取或寫入快取失敗。
+            SQLAlchemyError: 查詢 MySQL 失敗。
+        """
         market_batch_keys = get_and_slice_nightmarkets_multibatches()
         return market_batch_keys
 
     @task
     def task_cal_accidents_nearby_nightmarket(batch_key):
+        """計算一個批次內每個夜市周邊的事故，結果寫入 Redis。
+
+        由 `expand()` 依批次鍵動態展開，每個批次各是一個 task 實例。
+
+        Args:
+            batch_key (str): 該批次夜市清單在 Redis 中的鍵。
+
+        Returns:
+            str: 處理完成的訊息。
+
+        Raises:
+            ValueError: 批次在 Redis 中不存在或為空。
+            RedisError: 讀取或寫入快取失敗。
+        """
         cal_result = cal_accidents_nearby_nightmarket(batch_key)
         return cal_result
 
     @task
     def task_aggregate_national_master(market_batch_keys):
+        """彙總各批次的計算結果成全臺總表與儀表板統計，存入 Redis。
+
+        Args:
+            market_batch_keys (list[str]): 各批次在 Redis 中的鍵。
+
+        Returns:
+            None: 本 task 只有副作用。
+
+        Raises:
+            RuntimeError: 所有批次皆找不到周邊事故快取，聚合不出全臺總表。
+            RedisError: 讀取或寫入快取失敗。
+        """
         aggregate_national_master(market_batch_keys)
         return None
 

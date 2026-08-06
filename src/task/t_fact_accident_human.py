@@ -14,7 +14,38 @@ logger = get_logger(__name__)
 
 
 def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
-    """S"""
+    """從事故 CSV 清洗出事故當事人事實資料，一位當事人一列。
+
+    逐檔讀入後清洗日期、時間與經緯度，並做三項當事人專屬的處理：性別不是男或女
+    時年齡填 -1（那類列的年齡欄實際上是物件而非人）、肇逃轉成 0 或 1、依當事者
+    順位標出是否為第一肇事者。合併所有檔案後查 `dim_accident_day` 與
+    `fact_accident_main` 取得 `accident_id`，因此執行前那兩張表必須已經載入。
+
+    每列另外算一個 `row_hash`，取事故編號、當事者順位、年齡、性別、肇因子類別與
+    其他撞擊部位六欄湊成字串後取 SHA-256 前 32 碼，作為資料表的唯一鍵。函式會把
+    重複的 hash 筆數記進日誌，供檢查這組欄位是否足以區分不同當事人。
+
+    來源 CSV 若沒有「共享經濟或外送平台的名稱」欄（舊年度表頭），該欄會是 NaN，
+    不影響其餘欄位。
+
+    Args:
+        csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
+
+    Returns:
+        pandas.DataFrame: 當事人資料，空值已轉成 `None` 以便寫入 MySQL，形如：
+
+            accident_id      party_sequence  is_primary_party_sequence  gender  age  vehicle_type_major  hit_and_run  row_hash
+            2024010100000001  1               1                          男      34   機車                0            3f2a...c81d
+            2024010100000001  2               0                          女      28   自用小客車          0            9b7e...40aa
+
+    Raises:
+        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
+        FileNotFoundError: 清單中的某個路徑不存在。
+        SQLAlchemyError: 查詢維度表或事故主檔失敗。
+
+    Notes:
+        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010。
+    """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
 
@@ -22,7 +53,7 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
     for file_path in csvfile_paths:
         logger.info(f"正在處理csv檔案: {file_path}")
         # 讀取csv檔案、挑欄、改名、去空白
-        # 舊表頭沒有「共享經濟或外送平台的名稱」，該欄會是 NaN（ADR-0010）
+        # 舊表頭沒有「共享經濟或外送平台的名稱」，該欄會是 NaN
         df = read_traffic_accident_file(file_path, fact_accident_human_col_origin_map)
 
         # 清理發生日期

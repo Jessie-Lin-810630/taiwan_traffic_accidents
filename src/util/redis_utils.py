@@ -1,4 +1,17 @@
-"""Redis 共用工具：連線池單例、Pickle 快取的讀寫與刪除。"""
+"""Redis 的唯一存取面：連線池單例與 Pickle 快取的讀寫刪除。
+
+專案用 Redis 存放 DAG 預先算好的運算結果，讓前端頁面
+直接讀快取而不重算。存取一律將運算結果導出的 DataFrame、dict 走 pickle 序列化，
+因此連線固定 `decode_responses=False`，避免二進位資料被當成字串解碼而損毀。
+
+連線設定取自環境變數:
+
+- 有預設值: `REDIS_HOST`（localhost）、`REDIS_PORT`（6379）
+- 必填: `REDIS_PASSWORD`，缺少時在建立連線池的那一刻拋出
+
+Notes:
+    必填環境變數的檢查時機參考 ADR-0008。
+"""
 
 import os
 import pickle
@@ -23,18 +36,21 @@ _REDIS_POOL = None
 
 
 def _get_redis_pool() -> redis.ConnectionPool:
-    """初始化並獲取全域的 Redis 連線池。
+    """取得全域唯一的 Redis 連線池，首次呼叫時才建立。
 
-    針對要存入 Redis 資料庫這類 Pickled data 二進位資料的目標。
+    以模組層變數保存單例，避免每次取用都新建連線池而讓連線數暴增。
+    池的設定固定不解碼回應（保護 pickle 二進位資料）、連線逾時 3 秒、
+    讀寫逾時 5 秒。
 
     Returns:
-        redis.ConnectionPool: Connection Pool to Redis Server
+        redis.ConnectionPool: 連往 Redis 伺服器的連線池。
 
     Raises:
         ValueError: `REDIS_PASSWORD` 未設定。
+
+    Notes:
+        參考 ADR-0008。
     """
-    # 本專案的 Redis 一律以 --requirepass 啟動，沒密碼必定連不上；
-    # 放任 None 往下走的話 redis 只會回 NOAUTH，看不出是設定缺失（ADR-0008）。
     if not redis_password:
         raise ValueError("未設定 REDIS_PASSWORD，請檢查環境變數設置")
 
@@ -52,13 +68,18 @@ def _get_redis_pool() -> redis.ConnectionPool:
 
 
 def create_redis_client() -> redis.Redis:
-    """建立並測試 Redis 用戶端連線。
+    """從連線池取得 Redis 用戶端，並先 ping 過確認連線可用。
 
-    固定使用 decode_responses=False 以支援 Pickle 二進位資料存取。
-    在出錯時會主動向上拋出原始錯誤，保留完整 traceback 供呼叫端追查。
+    連線問題會在這裡就被發現，而不是延到實際讀寫時才浮現；出錯時記下 error
+    並原樣往外拋，保留完整 traceback 供呼叫端追查。
 
     Returns:
-        redis.Redis: new Redis client
+        redis.Redis: 已通過連線測試的 Redis 用戶端。
+
+    Raises:
+        ValueError: `REDIS_PASSWORD` 未設定。
+        RedisError: 連線失敗或 ping 無回應。
+        Exception: 其他非預期錯誤，同樣記下 error 後原樣往外拋。
     """
     logger.info("==== Connecting to Redis Server... ====")
 
@@ -83,16 +104,20 @@ def create_redis_client() -> redis.Redis:
 
 
 def set_cache(key: str, value, ttl: int = 864000) -> None:
-    """Store a serialized object in Redis with a configurable expiration time.
+    """把物件序列化後寫入 Redis，並設定存活時間 (TTL)。
 
-    The object is serialized using pickle before being written to Redis.
-    Cached data expires automatically after the specified TTL, helping
-    prevent stale data accumulation and reducing memory usage.
+    值以 pickle 序列化再寫入，因此 DataFrame、dict、list 都能直接存。
+    超過存活時間後由 Redis 自動刪除，避免舊快取一直佔用記憶體。
 
-    Parameters:
-        key (str): name of key to represeting the saved cache
-        value (Any): data to be saved as cache.
-        ttl (int, `default = 86400 seconds`): time-to-live in seconds of cache in Redis. If the storage time exceeds ttl, the cache will be delete to release the memory.
+    Args:
+        key (str): 快取的鍵名。
+        value: 要存入的資料，須為 pickle 可序列化的物件。
+        ttl (int): 存活秒數，預設 864000 秒（10 天）。
+
+    Raises:
+        ValueError: `REDIS_PASSWORD` 未設定。
+        RedisError: 連線或寫入失敗。
+        Exception: 其他非預期錯誤，例如物件無法被 pickle 序列化。
     """
     try:
         r = create_redis_client()
@@ -110,16 +135,26 @@ def set_cache(key: str, value, ttl: int = 864000) -> None:
 
 
 def get_cache(key: str) -> dict | pd.DataFrame | None:
-    """Retrieve and deserialize a cached object from Redis.
+    """從 Redis 讀出快取並還原成原本的物件。
 
-    The cached value is loaded from Redis and deserialized using
-    ``pickle.loads()`` before being returned. If the specified key does not exist or has expired, ``None`` is returned.
+    讀回的位元組以 `pickle.loads()` 還原，因此回傳型別取決於當初存進去的是什麼。
+    鍵不存在或已過期會回傳 `None`，與「Redis 故障」區分開來 —— 後者是拋例外。
 
-    Parameters:
-        key (str): Redis key associated with the cached object.
+    Args:
+        key (str): 快取的鍵名。
 
     Returns:
-        dict | pd.DataFrame | None: The deserialized cached object if the key exists; otherwise ``None``. The returned object type depends on what was originally stored (e.g., pandas DataFrame, dict, list, or other pickle-serializable objects).
+        dict | pandas.DataFrame | None: 還原後的快取物件；鍵不存在或已過期時為 `None`。
+            以夜市周邊事故的快取為例，還原出的 DataFrame 形如：
+
+                night_market  accident_id  distance_km  deaths
+                士林夜市      1130101001   0.42         0
+                士林夜市      1130101002   1.87         1
+
+    Raises:
+        ValueError: `REDIS_PASSWORD` 未設定。
+        RedisError: 連線或讀取失敗。
+        Exception: 其他非預期錯誤，例如反序列化失敗。
     """
     try:
         r = create_redis_client()
@@ -139,15 +174,17 @@ def get_cache(key: str) -> dict | pd.DataFrame | None:
 
 
 def delete_cache(key: str) -> None:
-    """Delete a cached object from Redis.
+    """立即刪除指定的快取鍵，釋放其佔用的記憶體。
 
-    Removes the specified Redis key immediately, allowing the associated
-    cached data and memory usage to be released.
+    鍵本來就不存在時不算失敗，Redis 直接回報刪除 0 筆。
 
-    :params key: Redis key associated with the cached object to delete.
-    :type key: str
-    :raises RedisError: If the Redis delete operation fails.
-    :raises Exception: For any unexpected error during the deletion process.
+    Args:
+        key (str): 要刪除的快取鍵名。
+
+    Raises:
+        ValueError: `REDIS_PASSWORD` 未設定。
+        RedisError: 連線或刪除失敗。
+        Exception: 其他非預期錯誤。
     """
     try:
         r = create_redis_client()

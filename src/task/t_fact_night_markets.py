@@ -1,4 +1,16 @@
-"""Transform 階段：清洗夜市地理資訊 JSON，產生夜市事實 DataFrame。"""
+"""Transform 階段：清洗夜市地理資訊 JSON，產生夜市事實資料並寫入資料庫。
+
+輸入是 `e_crawling_nightmarket()` 產出的 Google Maps 回應 JSON。清洗分成幾支
+彼此獨立的小函式，各自負責一個面向（名稱、地址、座標、營業時間、評分、地圖
+網址），再由 `t_clean_one_night_market()` 組成一個夜市的資料列。
+
+一個夜市會展開成多列，因為營業時間是按星期拆開的：資料表的唯一鍵是
+「緯度 + 經度 + 營業星期」，一天一列。跨夜營業會被拆成當天到 23:59:59 與隔天
+00:00:00 開始兩段。
+
+與其他 `t_*` 不同，本模組的入口 `t_fact_night_markets()` 會直接呼叫 `l_` 階段
+分批寫入資料庫，回傳 `None` 而非 DataFrame。
+"""
 
 import json
 import re
@@ -14,10 +26,19 @@ logger = get_logger(__name__)
 
 
 def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int]:
-    """Open the json file returned by googlemap place api which
+    """讀取夜市地理資訊 JSON，回傳與其筆數對應的序號清單。
 
-    describing the geometry and business time of all the night markets
-     in Taiwan.
+    供需要「有幾個夜市」而不需要內容的場合使用，例如切批次。
+
+    Args:
+        jsonfile_path (str | Path): 夜市地理資訊 JSON 的路徑。
+
+    Returns:
+        list[int]: 從 0 開始的序號清單，形如 `[0, 1, 2, ..., 471]`。
+
+    Raises:
+        FileNotFoundError: 路徑不存在。
+        json.JSONDecodeError: 檔案不是合法的 JSON。
     """
     jsonfile_path = Path(str(jsonfile_path))
     with jsonfile_path.open(mode="r", encoding="utf-8") as jf:
@@ -27,10 +48,32 @@ def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int
 
 
 def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
-    """Open the json file returned by googlemap place api which
+    """讀取夜市地理資訊 JSON，取出名稱含「夜市」或「商圈」的項目。
 
-    describing the geometry and business time of all the night markets
-     in Taiwan.
+    查詢時是拿維基百科的名稱去 Google 地圖比對，回應中難免混進不是夜市的地點，
+    這一步用名稱把它們濾掉。
+
+    Args:
+        jsonfile_path (str): 夜市地理資訊 JSON 的路徑。
+
+    Returns:
+        list[dict]: 每個元素是一個夜市的詳細資料（回應中的 `result` 部分），形如：
+
+            [
+                {
+                    "name": "士林夜市",
+                    "rating": 4.2,
+                    "formatted_address": "111台灣臺北市士林區大東路",
+                    "opening_hours": {"periods": [{"open": {"day": 0, "time": "1600"}, ...}]},
+                    "url": "https://maps.google.com/?cid=...",
+                    "geometry": {"location": {"lat": 25.088, "lng": 121.524}, ...},
+                },
+            ]
+
+    Raises:
+        FileNotFoundError: 路徑不存在。
+        json.JSONDecodeError: 檔案不是合法的 JSON。
+        KeyError: 回應項目缺少 `result` 欄位。
     """
     jsonfile_path = Path(jsonfile_path)
     with jsonfile_path.open(mode="r", encoding="utf-8") as jf:
@@ -45,7 +88,17 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
 
 
 def clean_night_market_name(a_night_market_info: dict) -> dict[str]:
-    """Extract and clean the name of a certain night market in Taiwan."""
+    """取出並清理一個夜市的名稱。
+
+    Google 地圖的名稱常帶括號補述（例如「基隆廟口夜市(仁三路)」），若括號內沒有
+    「夜市」或「商圈」字樣就整段去掉，只留主要名稱。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+
+    Returns:
+        dict[str, str]: 形如 `{"nightmarket_name": "基隆廟口夜市"}`。
+    """
     source = a_night_market_info
     nightmarket_name = source.get("name")
 
@@ -66,9 +119,28 @@ def clean_night_market_name(a_night_market_info: dict) -> dict[str]:
 def clean_night_market_address(
     a_night_market_info: dict, cities_per_region: dict
 ) -> dict[str]:
-    """Extract and clarify the address-related attributes of a certain
+    """從格式化地址拆出地區、縣市、行政區、郵遞區號與街道地址。
 
-    night market in Taiwan, including region, zipcode, city and area road.
+    先把「台」統一成「臺」，再依序取出各欄位：縣市以 `cities_per_region` 的縣市
+    名比對，地區由縣市反查，郵遞區號以「不緊鄰號、巷、弄、No.」的 3 到 6 位數字
+    比對，行政區取「區」字之前的片段並去掉前面的縣市與路名贅字。街道地址保留
+    原樣，方便回頭檢查前述清理是否有漏。任何一項比對不到都會填入說明字串
+    （例如「無匹配縣市資訊」），不會是空值。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+        cities_per_region (dict): 地區對應縣市清單的字典。
+
+    Returns:
+        dict[str, str]: 形如：
+
+            {
+                "region": "北部",
+                "city": "基隆市",
+                "district": "仁愛區",
+                "zipcode": "200",
+                "area_road": "200臺灣基隆市仁愛區玉田里仁三路",
+            }
     """
     source = a_night_market_info
 
@@ -111,6 +183,17 @@ def clean_night_market_address(
 
     # 清出第二、三行政區名，關鍵字：xx 區，由於"區"的字詞結構簡單，不需要動用速度較慢的reg
     def clean_district(formatted_address: str) -> str:
+        """從地址中取出第二、三級行政區名。
+
+        取「區」字之前的片段，再依序去掉縣、市、路、街、段、巷、樓等字之前的
+        贅字。以字串搜尋而非正規表達式處理，因為「區」的字詞結構單純。
+
+        Args:
+            formatted_address (str): 已統一為「臺」的格式化地址。
+
+        Returns:
+            str: 行政區名，例如 `"仁愛區"`；找不到「區」字時為 `"無匹配第二、三行政區"`。
+        """
         # 去後方贅字
         cyu_letter_idx = formatted_address.find("區")
         if cyu_letter_idx == -1:
@@ -145,9 +228,24 @@ def clean_night_market_address(
 def clean_night_market_geometry_location(
     a_night_market_info: dict,
 ) -> dict[float | None]:
-    """Extract and clarify the latitude and longitude of a certain
+    """取出一個夜市的中心座標與東北、西南兩個邊界端點座標。
 
-    night market in Taiwan.
+    取不到的欄位一律是 `None`，不會以 0 代替。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+
+    Returns:
+        dict[str, float | None]: 形如：
+
+            {
+                "latitude": 25.128240,
+                "longitude": 121.743557,
+                "northeast_latitude": 25.129718,
+                "northeast_longitude": 121.744682,
+                "southwest_latitude": 25.127020,
+                "southwest_longitude": 121.741984,
+            }
     """
     source = a_night_market_info
 
@@ -204,9 +302,36 @@ def clean_night_market_geometry_location(
 
 
 def clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
-    """Extract and transform the business datetime within a week for a certain
+    """把一週的營業時段整理成「一天一列」的形式。
 
-    night market in Taiwan.
+    來源的每個時段有開始與結束兩個時間點，跨夜時兩者落在不同天。為了讓資料
+    能按星期存放，這裡把時段拆成五種情況處理：
+
+    - 全年無休（來源沒有結束時間）：七天都填 00:00:00 到 23:59:59。
+    - 真正跨夜（例如週日 16:00 到週一 02:00）：拆成當天到 23:59:59 與隔天
+      00:00:00 起兩列。
+    - 週六跨到週日：同上，只是結束日的星期序號比開始日小。
+    - 結束時間標成隔天 00:00：不算真正跨夜，只填當天到 23:59:59 一列。
+    - 一般情況：開始與結束都在同一天，填一列。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+
+    Returns:
+        list[dict]: 每個元素是一天的營業時段，形如：
+
+            [
+                {
+                    "business_days_weekday": "星期日",
+                    "business_hours_opening": "16:00:00",
+                    "business_hours_closing": "23:59:59",
+                },
+                {
+                    "business_days_weekday": "星期一",
+                    "business_hours_opening": "00:00:00",
+                    "business_hours_closing": "02:00:00",
+                },
+            ]
     """
     source = a_night_market_info
     opening_info = source.get("opening_hours", {})
@@ -223,6 +348,14 @@ def clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
 
     # 格式化時間函式
     def format_t(t):
+        """把來源的四碼時間字串轉成 `HH:MM:SS`。
+
+        Args:
+            t (str): 四碼時間字串，例如 `"1630"`。
+
+        Returns:
+            str: 形如 `"16:30:00"` 的時間字串。
+        """
         return f"{t[:2]}:{t[2:]}:00"
 
     find_business_datetime = []
@@ -311,7 +444,15 @@ def clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
 
 
 def clean_googlemap_rating(a_night_market_info: dict) -> dict[float]:
-    """Extract and clean the rating for a certain night market in Taiwan."""
+    """取出一個夜市的 Google 地圖評分。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+
+    Returns:
+        dict[str, float | None]: 形如 `{"googlemap_rating": 4.2}`；
+            來源沒有評分時值為 `None`。
+    """
     source = a_night_market_info
     rating = source.get("rating", None)
     cleaned_rating = {
@@ -321,7 +462,15 @@ def clean_googlemap_rating(a_night_market_info: dict) -> dict[float]:
 
 
 def clean_googlemap_url(a_night_market_info: dict) -> dict[str]:
-    """Extract and clean the URL to GoogleMap APP for a certain night market in Taiwan."""
+    """取出一個夜市在 Google 地圖上的網址。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+
+    Returns:
+        dict[str, str]: 形如 `{"url_to_googlemap": "https://maps.google.com/?cid=..."}`；
+            來源沒有網址時值為 `"未取得"`。
+    """
     source = a_night_market_info
     url = source.get("url", "未取得")
     cleaned_url = {"url_to_googlemap": str(url)}
@@ -331,10 +480,39 @@ def clean_googlemap_url(a_night_market_info: dict) -> dict[str]:
 def t_clean_one_night_market(
     a_night_market_info: dict, cities_per_region: dict
 ) -> list[dict]:
-    """Apply discrete functions to get the Series containing
+    """把各支清洗函式的結果組成一個夜市的資料列。
 
-    cleaned/transformed data for one night market in Taiwan.
-    The generated Series are combined and returned in a list[dict].
+    以營業時段（一天一列）為骨架，其餘欄位（名稱、地址、座標、評分、網址）
+    對整個夜市都相同，逐欄補上去，因此一個夜市會展開成多列。
+
+    Args:
+        a_night_market_info (dict): 一個夜市的詳細資料。
+        cities_per_region (dict): 地區對應縣市清單的字典。
+
+    Returns:
+        list[dict]: 一個夜市的多列資料，每個字典是一列，形如：
+
+            [
+                {
+                    "business_days_weekday": "星期日",
+                    "business_hours_opening": "16:00:00",
+                    "business_hours_closing": "23:59:59",
+                    "nightmarket_name": "士林夜市",
+                    "region": "北部",
+                    "city": "臺北市",
+                    "district": "士林區",
+                    "zipcode": "111",
+                    "area_road": "111臺灣臺北市士林區大東路",
+                    "latitude": 25.088100,
+                    "longitude": 121.524300,
+                    "northeast_latitude": 25.089000,
+                    "northeast_longitude": 121.525200,
+                    "southwest_latitude": 25.087200,
+                    "southwest_longitude": 121.523400,
+                    "url_to_googlemap": "https://maps.google.com/?cid=...",
+                    "googlemap_rating": 4.2,
+                },
+            ]
     """
     nm = a_night_market_info
 
@@ -374,13 +552,22 @@ def t_fact_night_markets(
     database: str,
     batch_size: int | None = None,
 ) -> None:
-    """分批清洗夜市地理資訊，並將結果寫入 `fact_night_markets`。
+    """分批清洗夜市地理資訊，每清完一批就寫入 `fact_night_markets`。
 
-    Parameters:
-        night_market_info_list (list[dict]): Google Maps API 回傳的夜市詳細資訊。
-        cities_per_region (dict[list]): 地區（北／中／南部）對應的縣市清單。
+    與其他 `t_*` 不同，本函式不回傳 DataFrame，而是逐批呼叫 `l_fact_night_markets()`
+    寫入資料庫，避免一次把全部夜市的資料留在記憶體。每一批清洗後會補空值並去除
+    完全重複的列。
+
+    Args:
+        night_market_info_list (list[dict]): 夜市詳細資料清單，
+            即 `read_googlemap_responsed_json()` 的產出。
+        cities_per_region (dict): 地區對應縣市清單的字典。
         database (str): 目標資料庫名稱。
-        batch_size (int | None): 每批處理的夜市筆數；None 表示一次處理全部。
+        batch_size (int | None): 每批處理幾個夜市；`None` 表示一次處理全部。
+
+    Raises:
+        pymysql.MySQLError: 任一批寫入失敗，該批事務復原後往外拋。
+        TypeError: `batch_size` 為 `None` 時日誌訊息的計算會失敗。
     """
     # 清理、並將清洗後的dataframe合併
 

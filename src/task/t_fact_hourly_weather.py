@@ -28,22 +28,39 @@ _TARGET_COLUMNS = [
 def t_fact_hourly_weather(
     df_weather_raw: pd.DataFrame, df_all_acc_loc: pd.DataFrame
 ) -> pd.DataFrame:
-    """Transform: 濾掉與事故時地無關的天氣觀測，並生成 hash 作為業務唯一鍵。
+    """濾出與事故時間地點相符的天氣觀測，並生成業務唯一鍵。
 
-    整年逐小時的天氣資料量級是上億列，但真正有用的只有「事故發生的那個時間、
-    那個觀測點」的那些列，因此這裡以 inner join 把它壓到百萬列等級。
+    整年逐小時的天氣資料是上億列，真正有用的只有「事故發生的那個時間、那個
+    觀測點」的那些列，因此這裡以時間與座標做 inner join 壓到百萬列等級。merge
+    的兩側經緯度都會再走一次 `round_to_weather_grid()` 當防線 —— 只要有一側用了
+    別的算法，就會一列都對不上而且不會報錯。
 
-    merge 的兩側都必須經過 `round_to_weather_grid()` ——
-    事故側由 `e_get_all_acc_geo()` 完成，天氣側在此正規化一次當防線。
-    只要有一側用了別的算法，join 會一列都對不上，而且不會報錯。
+    唯一鍵不直接用「觀測時間 + 經緯度」，而是把三者組成字串後取 SHA-256 前 32 碼
+    存成 `hash_value`，因為經緯度是浮點數，資料庫與 pandas 讀出來的表示可能不同，
+    直接當唯一鍵會讓寫入前後的判定不一致。同一筆天氣觀測可能對應多個事故地點，
+    因此最後依 hash 去重。
 
-    :param df_weather_raw: 從OpenMeteo API下載下來的原始整年度天氣觀測資料，為dataframe
-    :type df_weather_raw: pd.DataFrame
-    :param df_all_acc_loc: 描述每個車禍地點經緯度進位至氣象網格的結果之dataframe
-    :type df_all_acc_loc: pd.DataFrame
-    :return: 車禍事故日期時間相近的天氣觀測資料之dataframe，若沒有時間相近的天氣資料，
-             則回傳empty dataframe
-    :rtype: DataFrame
+    Args:
+        df_weather_raw (pandas.DataFrame): 整年度的原始天氣觀測，需含
+            `datetime_ISO8601`、`latitude_round`、`longitude_round` 與各氣象欄位。
+        df_all_acc_loc (pandas.DataFrame): 每筆事故的進位座標與整點化時間，
+            即 `e_get_all_acc_geo()` 的產出。
+
+    Returns:
+        pandas.DataFrame: 可直接寫入 `fact_hourly_weather` 的資料，空值已轉成
+            `None`，形如：
+
+            observation_datetime  temperature_degree  rain_within_hour_mm  weather_code  longitude_round  latitude_round  hash_value
+            2024-01-01 08:00:00   16.40               0.00                 3             121.55           25.05           3f2a...c81d
+            2024-01-01 10:00:00   18.10               0.20                 61            120.65           24.15           9b7e...40aa
+
+            兩側沒有任何時間與地點相符的列時，回傳空 DataFrame。
+
+    Raises:
+        KeyError: 任一側缺少 merge 或挑欄所需的欄位。
+
+    Notes:
+        兩側座標必須走同一支進位函式，參考 ADR-0012。
     """
     # 1. 清理df_weather_raw統一成YYYY-mm-dd HH:MM:SS的格式並先維持字串
     df_weather_raw["datetime_ISO8601"] = (
@@ -53,7 +70,7 @@ def t_fact_hourly_weather(
         .str.replace(":00", ":00:00")
     )
 
-    # 2. 兩邊的經緯度都走同一支進位函式，下方的 merge 才接得起來（ADR-0012）
+    # 2. 兩邊的經緯度都走同一支進位函式，下方的 merge 才接得起來
     df_all_acc_loc["lat_round"] = round_to_weather_grid(df_all_acc_loc["lat_round"])
     df_all_acc_loc["lon_round"] = round_to_weather_grid(df_all_acc_loc["lon_round"])
     df_weather_raw["latitude_round"] = round_to_weather_grid(

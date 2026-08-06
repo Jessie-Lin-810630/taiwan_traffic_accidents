@@ -1,4 +1,13 @@
-"""單一夜市 AI 深度診斷頁：自訂半徑的周邊事故剖析與 Groq 生成報告。"""
+"""Streamlit 分頁：單一夜市 AI 深度診斷，自訂半徑的周邊事故剖析與生成式報告。
+
+使用者選定夜市後，本頁讀取該夜市 3 公里的預計算快取，再依使用者指定的半徑
+就地裁切，畫出地圖與各項統計，最後把統計數字包成 prompt 交給 Groq 生成防護
+建議。
+
+設定取自環境變數:
+
+- 必填: `GROQ_API_KEY`，缺少時在呼叫生成服務的那一刻拋出
+"""
 
 import os
 import re
@@ -31,7 +40,26 @@ st.set_page_config(layout="wide", page_title="單一夜市事故AI分析", page_
 #   Hour              ← accident_hourtime
 #   primary_cause     ← cause_analysis_major_individual_grouped
 def normalize_accident_columns(df):
-    """把 Redis 快取的欄位名補成本頁使用的名稱。"""
+    """把 Redis 快取的欄位名補成本頁使用的名稱。
+
+    快取沿用 mart 層分析表的欄位名，與本頁沿用的舊表對不上，因此在此就地補齊
+    三欄：`accident_datetime` 由日期與時間相加、`Hour` 取自事故小時、
+    `primary_cause` 取肇因研判的子類別（大類別那欄講的是用路人身分，不是肇因）。
+    已存在的欄位不會被覆蓋。
+
+    Args:
+        df (pandas.DataFrame): 從快取讀出的事故資料。
+
+    Returns:
+        pandas.DataFrame: 補好欄位的副本，形如：
+
+            accident_id      accident_datetime    Hour  primary_cause      latitude   longitude
+            2024010100000001  2024-01-01 08:15:00  8     未依規定讓車       25.088100  121.524300
+            2024010100000002  2024-01-01 20:40:00  20    行人未依號誌穿越   25.089200  121.523100
+
+    Raises:
+        KeyError: 來源缺少計算所需的欄位。
+    """
     df = df.copy()
     if "accident_datetime" not in df.columns:
         df["accident_datetime"] = pd.to_datetime(
@@ -51,10 +79,33 @@ def normalize_accident_columns(df):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_single_market_redis(lat, lon, radius_km):
-    """讀取該夜市 3 km 快取包裹，再裁切成指定半徑內的事故。
+    """讀取該夜市 3 公里的快取，再裁切成指定半徑內的事故。
 
-    快取「故障」與「未命中」語意分離（ADR-0003）：前者由 get_cache 拋
-    RedisError 交呼叫端處理，後者才回傳空表。
+    快取存的是 3 公里方框內的事故，這裡以半正矢距離公式算出每筆事故與夜市中心
+    的實際距離，濾出半徑內的部分，因此使用者調整半徑不需要重新查詢。結果以
+    Streamlit 快取存在伺服器記憶體 24 小時。
+
+    「快取故障」與「快取裡沒有這筆資料」是兩回事：前者拋出例外交呼叫端處理，
+    後者才回傳空表。
+
+    Args:
+        lat (float): 夜市中心緯度。
+        lon (float): 夜市中心經度。
+        radius_km (float): 要裁切的半徑，單位公里。
+
+    Returns:
+        pandas.DataFrame: 半徑內的事故，欄位已補齊成本頁使用的名稱，形如：
+
+            accident_id      accident_datetime    Hour  primary_cause    death_count  injury_count
+            2024010100000001  2024-01-01 08:15:00  8     未依規定讓車     0            1
+
+            快取不存在或為空時回傳空 DataFrame。
+
+    Raises:
+        RedisError: 讀取快取失敗。
+
+    Notes:
+        「快取故障」與「快取裡沒有這筆資料」的語意分離參考 ADR-0003。
     """
     cache_key = f"traffic:nearby_v12:{lat:.4f}_{lon:.4f}_3.0_all_sample"
     result = get_cache(cache_key)
@@ -77,7 +128,18 @@ def get_single_market_redis(lat, lon, radius_km):
 
 
 def main():
-    """繪製單一夜市 AI 深度診斷頁。"""
+    """組出單一夜市 AI 深度診斷頁。
+
+    流程是：注入頁面樣式 → 取得夜市清單並畫出側邊欄 → 讓使用者逐層選出地區、
+    縣市、行政區與夜市，並指定分析半徑 → 讀取並裁切該夜市的事故 → 畫出地圖、
+    時段與肇因等統計圖表 → 按下按鈕時呼叫 Groq 生成防護建議。
+
+    資料服務層或快取服務故障時，前端是例外停止傳播之處，因此完整記錄後顯示
+    錯誤訊息並中止本次渲染。
+
+    Notes:
+        前端負責決定如何降級，參考 ADR-0003。
+    """
     st.markdown(
         """
     <style>
@@ -229,7 +291,7 @@ def main():
                     target_market["lat"], target_market["lon"], radius_km
                 )
             except RedisError:
-                # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+                # 快取「故障」與「快取裡沒有這筆資料」自 ADR-0003 起語意分離：
                 # 前者拋 RedisError，後者才會回傳空表。
                 logger.error(
                     f"夜市周邊事故快取讀取失敗：{sel_market}",
@@ -589,7 +651,33 @@ def get_ai_analysis(
 ):
     """把該夜市的統計數據包成 prompt，交給 Groq 生成防護建議。
 
-    例外一律往上拋，由呼叫端（前端邊界）決定如何降級（ADR-0003）。
+    產出五個重點：肇因與預防、綜合環境風險、路段特徵推測、熱點改善對策與安全
+    總結標語，限 150 字內。回傳前會把單一換行改成雙換行，Streamlit 才會渲染出
+    正確的段落。結果以 Streamlit 快取存在伺服器記憶體 1 小時，同樣的參數不會
+    重複呼叫 API。例外一律往上拋，由前端決定如何降級。
+
+    Args:
+        market_name (str): 夜市名稱。
+        total (int): 事故總件數。
+        pdi (float): 綜合危險指數。
+        dead (int): 死亡人數。
+        hurt (int): 受傷人數。
+        top_cause (str): 件數最多的肇因。
+        peak_hour (int): 事故最多的時段（小時）。
+        rain (float): 雨天事故佔比（百分比）。
+        dark (float): 照明昏暗事故佔比（百分比）。
+        wet (float): 路面濕滑事故佔比（百分比）。
+        risky_loc (str): 最危險的熱點描述。
+
+    Returns:
+        str: Markdown 條列式的分析內容。
+
+    Raises:
+        ValueError: `GROQ_API_KEY` 未設定。
+        groq.APIError: 呼叫生成服務失敗（額度、認證或伺服器錯誤）。
+
+    Notes:
+        必填設定在真正要用的那一刻才驗證，參考 ADR-0008。
     """
     api_key = os.getenv("GROQ_API_KEY")
     # 必填設定在真正要用的那一刻驗證，避免缺設定被下游的認證錯誤掩蓋（ADR-0008）

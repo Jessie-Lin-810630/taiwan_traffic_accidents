@@ -1,4 +1,20 @@
-"""Extract 階段：爬取全臺夜市清單，並向 Google Maps API 取得地理資訊。"""
+"""Extract 階段：爬取全臺夜市清單，並向 Google Maps API 取得地理資訊。
+
+分兩步：先從維基百科的「臺灣夜市列表」抓下夜市名稱與地址存成 CSV，再逐一
+拿名稱去 Google Places API 查 place ID 與詳細資料（座標、評分、營業時間、
+地圖網址），彙整成一份 JSON。兩份檔案都落在 `data/raw`。
+
+Places API 的失敗寫在回應內容的 `status` 欄位而非 HTTP 狀態碼，因此本模組
+自訂 `PlacesAPIError` 例外類別，並向內分成暫時性與永久性兩類例外，
+然後再與傳輸層的暫時性故障合併成單一重試判斷式。
+
+設定取自環境變數:
+
+- 必填: `GOOGLE_MAP_API_KEY`，缺少時在送出請求的那一刻拋出
+
+Notes:
+    API 失敗的分類方式參考 ADR-0006，金鑰的檢查時機參考 ADR-0008。
+"""
 
 import json
 import os
@@ -36,37 +52,45 @@ cities_per_region = {
 
 
 def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict) -> str:
-    """Request the url Wikipedia to get the list of night markets in Taiwan.
+    """從維基百科抓下全臺夜市清單，存成 CSV 並回傳檔案路徑。
 
-    The obtained list will be saved in a new csv file of which the file path is
-    return value.
+    頁面上每個縣市各一張表格，逐列取出夜市名稱與地址，只保留名稱含「夜市」或
+    「商圈」的列，並依縣市補上所屬地區。解析不到任何夜市時拋出而不是產出空
+    CSV，因為那代表頁面結構已變；回傳路徑即代表該檔案確實寫出且含有資料。
 
-    :param url: URL of Wikipedia summarizing the night markets in Taiwan.
-    :type url: str
-    :param headers: Headers required for Request.get() function.
-    :type headers: dict
-    :param cities_per_region: Dict to map the region that a night market is located
-    (north, south, west, east, outlying islands).
-    :type cities_per_region: dict
+    Args:
+        url (str): 維基百科「臺灣夜市列表」頁面網址。
+        headers (dict): 請求標頭。
+        cities_per_region (dict): 地區對應縣市清單的字典，用來替每個夜市標上
+            北部、中部、南部、東部或離島。
 
-    :returns: String of the path of generated csv file. 回傳值代表該檔案確實已寫出
-    且含有夜市資料；任何失敗都會拋出例外而非回傳路徑（ADR-0005）。
-    :rtype: str
+    Returns:
+        str: 產出的 CSV 檔案路徑，形如
+            `"data/raw/Taiwan_night_markets_list_2026-08-05.csv"`。
+            檔案內容形如：
 
-    :raises requests.exceptions.RequestException: 抓取失敗或回應非 2xx。
-    :raises ValueError: 頁面解析不到任何夜市。
+                Region  City    Night_market_name  Night_market_address
+                北部    臺北市  士林夜市           臺北市士林區大東路
+                北部    臺北市  饒河街觀光夜市     臺北市松山區饒河街
+
+    Raises:
+        requests.exceptions.RequestException: 抓取失敗、逾時或回應非 2xx。
+        ValueError: 頁面解析不到任何夜市，代表頁面結構已變。
+
+    Notes:
+        「不回傳空結果」的取捨參考 ADR-0005。
     """
     # 變數宣告
     response = None
 
-    # 定義存檔路徑，並確保資料夾存在（路徑基準見 ADR-0007）
+    # 定義存檔路徑，並確保資料夾存在
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
     csvfile_name = RAW_DATA_DIR / f"Taiwan_night_markets_list_{today}.csv"
 
     try:
         response = requests.get(url, headers=headers, timeout=120)
-        # 非 2xx 直接轉成 HTTPError，交由下方的 except 分類後原樣拋出（ADR-0005）。
+        # 非 2xx 直接轉成 HTTPError，交由下方的 except 分類後原樣拋出。
         response.raise_for_status()
         logger.info(f"====成功訪問{url}====")
         soup = BeautifulSoup(response.text, "html.parser")
@@ -88,10 +112,8 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
         citylst = []
         nm_namelst = []
         nm_addresslst = []
-        city_name = soup.find_all("h3")  # 基隆市、臺北市、......、連江縣
-        # print(len(city_name)) # 22個縣市
-        tables = soup.find_all("table", class_="wikitable")
-        # print(len(tables)) # 22個表格
+        city_name = soup.find_all("h3")  # 基隆市、臺北市、......、連江縣，22 個縣市
+        tables = soup.find_all("table", class_="wikitable")  # 22個表格
         for i in range(len(tables)):
             table = tables[i]
             rows = table.find_all("tr")
@@ -127,7 +149,7 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
                 "Night_market_address": nm_addresslst,
             }
         )
-        # 解析不到任何夜市代表頁面結構已變，不可產出空 CSV 讓下游繼續（ADR-0005）。
+        # 解析不到任何夜市代表頁面結構已變。
         if df.empty:
             raise ValueError(f"自 {url} 解析不到任何夜市，請檢查爬蟲程式")
 
@@ -136,23 +158,22 @@ def find_tw_night_markets_list(url: str, headers: dict, cities_per_region: dict)
         return str(csvfile_name)
 
 
-# 讀取 .env
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_MAP_API_KEY")
 
-# 夜市查不到是常態（維基名稱不一定對得上 Google Maps），但大量查不到代表
-# 系統性問題（金鑰失效、頁面改版）。門檻可調，並非算出來的值。
-MAX_FAILURE_RATE = 0.5
-
 
 def _require_api_key() -> None:
-    """呼叫 Places API 前確認金鑰存在（ADR-0008）。
+    """呼叫 Places API 前確認金鑰存在。
 
-    沒有金鑰時 API 會回 REQUEST_DENIED，經 ADR-0006 的分類後訊息會說
-    「金鑰無效」—— 但實際上是根本沒有金鑰，兩者的排查方向不同。
+    先檢查再送出請求，錯誤訊息才會直指缺少的環境變數；
+    否則 API 只會回 `REQUEST_DENIED`，此訊息說的是「金鑰無效」，
+    而這與「自己根本沒有帶金鑰」的排查方向不完全相同。
 
     Raises:
         ValueError: `GOOGLE_MAP_API_KEY` 未設定。
+
+    Notes:
+        參考 ADR-0008。
     """
     if not API_KEY:
         raise ValueError("未設定 GOOGLE_MAP_API_KEY，請檢查環境變數設置")
@@ -162,23 +183,24 @@ class PlacesAPIError(RuntimeError):
     """Google Places API 以 HTTP 200 回報的失敗。
 
     傳輸層成功（狀態碼 200），失敗寫在 body 的 status 欄位，
-    因此無法用 `requests` 的例外體系表達。
+    因此無法用 `requests` 的例外類別體系表達，得自訂。
     """
 
 
 class TransientPlacesAPIError(PlacesAPIError):
-    """暫時性失敗（配額超限、伺服器錯誤），值得重試。"""
+    """暫時性故障（配額超限、伺服器錯誤），值得重試。"""
 
 
 class PermanentPlacesAPIError(PlacesAPIError):
-    """永久性失敗（授權或參數問題），重試只會浪費配額並延後告警。"""
+    """永久性故障（授權或參數問題），重試只會浪費配額並延後告警。"""
 
 
-# Google Places API 的失敗寫在 body 的 status 欄位，HTTP 狀態碼一律是 200，
-# 因此必須顯式分類，否則所有失敗都會被誤判成「找不到地點」（ADR-0006）。
-# 不在此表中的 status 都不是故障：OK 代表有結果，ZERO_RESULTS 與
-# NOT_FOUND（Place Details 專有，place_id 已失效）代表查無資料。
-# status 定義見：
+# Google Places API 的失敗寫在 body 的 status 欄位，但 HTTP 狀態碼一律是 200，
+# 因此必須顯式分類，否則所有失敗都會在解析 json 後，被模糊成「無資料、找不到地點」。
+# 不在此字典中的 key 在本專案都不認為是故障，包含三種：
+# - OK：有結果
+# - ZERO_RESULTS 與 NOT_FOUND（Place Details 專有，place_id 已失效）：確實查無資料。
+# status 完整定義見：
 # https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place#PlacesSearchStatus
 API_STATUS_ERRORS: dict[str, tuple[type[PlacesAPIError], str]] = {
     "OVER_QUERY_LIMIT": (TransientPlacesAPIError, "配額或 QPS 超限"),
@@ -194,24 +216,26 @@ API_STATUS_ERRORS: dict[str, tuple[type[PlacesAPIError], str]] = {
     ),
 }
 
-# 查無資料的兩個 status：不是故障，僅供 `_has_data()` 內部判斷。
+# 僅供 `_has_data()` 內部判斷。
 _NOT_FOUND_STATUSES = frozenset({"ZERO_RESULTS", "NOT_FOUND"})
 
 
 def _has_data(data: dict, context: str) -> bool:
-    """檢查 Places API 回應的 status，故障一律拋出（ADR-0006）。
+    """檢查 Places API 回應的 `status`，確認是否查到空資料，若為故障則改 raise。
 
-    Parameters:
-        data (dict): API 回應解碼後的 dict。
-        context (str): 用於錯誤訊息的查詢對象（夜市名稱或 place_id）。
+    Args:
+        data (dict): API 回應解碼後的字典。
+        context (str): 寫進錯誤訊息的查詢對象，夜市名稱或 place ID。
 
     Returns:
-        bool: True 代表回應含可用資料；False 代表查無資料（不是故障）。
+        bool: `True` 代表有查到可用資料， `False` 代表查無資料。
 
     Raises:
-        TransientPlacesAPIError: 配額超限或伺服器錯誤，由 tenacity 的
-        retry_on_transient_api wrapper 重試。
+        TransientPlacesAPIError: 配額超限或伺服器錯誤，此類型例外可在外層函式搭配一個重試裝飾器接住後執行重試。
         PermanentPlacesAPIError: 授權或參數錯誤，重試無用，立即失敗。
+
+    Notes:
+        參考 ADR-0006。
     """
     status = data.get("status", "UNKNOWN_ERROR")
 
@@ -221,26 +245,33 @@ def _has_data(data: dict, context: str) -> bool:
             f"Google Places API 回報 {status}（查詢對象：{context}）：{hint}"
         )
 
-    # 如果不需要 raise 暫時性失敗或是永久性失敗，則改檢查是否為空資料後，回傳布林值。
+    # 如果不需要 raise 暫時性故障或是永久性故障，則改檢查是否為空資料後，回傳布林值。
     return status not in _NOT_FOUND_STATUSES
 
 
 def _should_retry(exc: BaseException) -> bool:
-    """這兩支 API 函式有兩種暫時性失敗來源，都值得重試（ADR-0006）。
+    """判斷例外是否值得重試，有兩種暫時性故障來源適合重試。
 
-    - 傳輸層：連線斷、Google 回 5xx／429 → `requests` 的例外，由 `is_transient` 認得
-    - body 層：HTTP 200 但 status 是 OVER_QUERY_LIMIT → `TransientPlacesAPIError`
+    來源一: 由 `is_transient()` 筐列的連線中斷、逾時、429 與 5xx。
+    來源二: 為 GOOGLE MAP API 自訂包裝的 `TransientPlacesAPIError`，
+    且由 `_has_data()` 拋出。
+    兩來源合併成單一判斷式，再傳給 tenacity 重試裝飾器 `retry`。
 
-    兩者併成單一判斷式，而不是疊兩層裝飾器 —— 疊起來雖然條件互斥、
-    行為正確，但重試上限會變成 3×3 的隱患，且讀者要推敲兩層的交互作用。
+    Args:
+        exc (BaseException): 要判斷的例外。
+
+    Returns:
+        bool: 值得重試為 `True`，否則為 `False`。
+
+    Notes:
+        參考 ADR-0006。
     """
-    # TransientPlaceAPIError 代表 status_code = 200 但是 status 欄位暗示有錯誤；
-    # is_transient() 代表 status_code == 429/5xx、TimeoutError 或 ConnectionError。
-    # 意即，TransientPlaceAPIError、TimeoutError 、 ConnectionError、429/5xx 都會回傳 True。
+    # TransientPlaceAPIError、TimeoutError、ConnectionError、429/5xx 都會回傳 True。
+    # 其中 TransientPlaceAPIError 代表 status_code = 200 但是 status 欄位暗示有錯誤。
     return isinstance(exc, TransientPlacesAPIError) or is_transient(exc)
 
 
-# 使用 _should_retry 判斷是否為暫時性失敗，因為暫時性失敗適合重試。
+# 改用 _should_retry 判斷是否該重試，而非單用 is_transient 判斷
 retry_on_transient_api = retry(
     retry=retry_if_exception(_should_retry),
     stop=stop_after_attempt(RETRY_ATTEMPTS),
@@ -251,24 +282,27 @@ retry_on_transient_api = retry(
 
 @retry_on_transient_api
 def search_place_id(place_name: str) -> None | str:
-    """Call the GoogleMap Place API to request the place IDs of each
+    """以地點名稱向 Places API 查詢 place ID。
 
-    interested location.
+    回傳 `None` 只代表 Google 地圖上查無此地點，那是正常結果；配額超限會自動
+    重試，金鑰或參數錯誤則立即拋出。
 
-    回傳 ``None`` 只代表 Google Maps 查無此地點（``ZERO_RESULTS``）；
-    配額超限會重試，金鑰或參數錯誤則立即拋出（ADR-0006）。
+    Args:
+        place_name (str): 地點或店家名稱，這裡傳入的是夜市名稱。
 
-    :param place_name: location name or shop name (e.g. night market name)
-    :type place_name: str
+    Returns:
+        str | None: 查到的 place ID，形如
+            `"ChIJc0rOM6yqQjQRrjfLzHVzOOs"`；查無此地點時為 `None`。
 
-    :returns: The place ID, or None when the place is genuinely not found.
-    :rtype: None or str
+    Raises:
+        ValueError: `GOOGLE_MAP_API_KEY` 未設定。
+        TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
+        PermanentPlacesAPIError: 授權或參數錯誤，不重試。
+        requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
 
-    :raises TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
-    :raises PermanentPlacesAPIError: 授權或參數錯誤。
-    :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
+    References:
+        https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place
     """
-    # 參考文件: https://developers.google.com/maps/documentation/places/web-service/legacy/search-find-place
     _require_api_key()
 
     base_url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
@@ -304,23 +338,41 @@ def search_place_id(place_name: str) -> None | str:
 
 @retry_on_transient_api
 def get_place_details(place_id: str) -> dict | None:
-    """Use the place ID and call the GoogleMap Place API to get detailed information
+    """以 place ID 向 Places API 查詢地點詳細資料。
 
-    of a location, including name, rating, formatted_address, opening_hours, URL to GoogleMap
-    and geometry.
+    取回的欄位有名稱、評分、格式化地址、營業時間、地圖網址與座標範圍。
+    回傳 `None` 只代表查無此 place ID 的細節；配額超限會自動重試，金鑰或參數
+    錯誤則立即拋出。
 
-    回傳 ``None`` 只代表查無此 place_id 的細節（``ZERO_RESULTS``）；
-    配額超限會重試，金鑰或參數錯誤則立即拋出（ADR-0006）。
+    Args:
+        place_id (str): Places API 的地點識別碼。
 
-    :param place_id: place ID registered in GoogleMap API
-    :type place_id: str
+    Returns:
+        dict | None: 回應解碼後的字典，查無資料時為 `None`。內容形如：
 
-    :returns: A python dict decoded from the json response, or None when not found.
-    :rtype: dict or None
+            {
+                "status": "OK",
+                "result": {
+                    "name": "士林夜市",
+                    "rating": 4.2,
+                    "formatted_address": "111臺北市士林區大東路",
+                    "opening_hours": {"weekday_text": ["星期一: 16:00 – 00:00", ...]},
+                    "url": "https://maps.google.com/?cid=...",
+                    "geometry": {
+                        "location": {"lat": 25.088, "lng": 121.524},
+                        "viewport": {
+                            "northeast": {"lat": 25.089, "lng": 121.525},
+                            "southwest": {"lat": 25.087, "lng": 121.523},
+                        },
+                    },
+                },
+            }
 
-    :raises TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
-    :raises PermanentPlacesAPIError: 授權或參數錯誤。
-    :raises requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
+    Raises:
+        ValueError: `GOOGLE_MAP_API_KEY` 未設定。
+        TransientPlacesAPIError: 配額超限或伺服器錯誤，重試耗盡後拋出。
+        PermanentPlacesAPIError: 授權或參數錯誤，不重試。
+        requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
     """
     _require_api_key()
 
@@ -353,20 +405,36 @@ def get_place_details(place_id: str) -> dict | None:
         return data
 
 
+# 因維基百科的名稱不一定完全對得上 Google 地圖，允許零星幾個夜市查不到為常態，
+# 但大量查不到代表系統性問題（金鑰失效、頁面改版），
+# 此 RATE 門檻非硬性規定，可自己調整。
+MAX_FAILURE_RATE = 0.5
+
+
 def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
-    """Extracting data:
+    """讀入夜市清單 CSV，逐一查詢地理資訊並彙整成一份 JSON。
 
-    Open the csv file that containing the night market name.
-    With them, call the GoogleMap API by the function get_place_id() and get_place_details()
-    to get the place details ot night markets in Taiwan. The place details is saved in new
-    json file.
+    每個夜市先查 place ID、再查詳細資料，兩步任一查無結果就記錄下來並跳過。
+    因維基百科的名稱不一定完全對得上 Google 地圖，允許零星幾個夜市查不到為常態，
+    但如果整體失敗率超過 `MAX_FAILURE_RATE`（50%）就拋出，
+    因為這反而可能代表金鑰失效或來源頁面改版等系統性問題。
 
-    :param csvfile_path: csv file path to open.
-    :type csvfile_path: str | Path
+    Args:
+        csvfile_path (str | Path): 夜市清單 CSV 的路徑，需含
+            `Night_market_name` 欄位，即 `find_tw_night_markets_list()` 的產出。
 
-    :returns: If requests.Exception,no founding ID/details or file I/O exceptioon.
-    Otherwise, the path of generated json file is returned.
-    :rtype: str | Path
+    Returns:
+        str: 產出的 JSON 檔案路徑，形如
+            `"data/raw/Taiwan_night_markets_from_map_api_2026-08-05.json"`。
+            檔案內容是 `get_place_details()` 回應的清單。
+
+    Raises:
+        ValueError: `GOOGLE_MAP_API_KEY` 未設定，或查詢失敗率超過門檻。
+        FileNotFoundError: 夜市清單 CSV 不存在。
+        KeyError: CSV 缺少 `Night_market_name` 欄位。
+        PermanentPlacesAPIError: 授權或參數錯誤。
+        requests.exceptions.RequestException: 傳輸層失敗，重試耗盡後拋出。
+        OSError: JSON 檔案寫入失敗。
     """
     _require_api_key()
 
@@ -406,7 +474,6 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
         )
 
     # 合併儲存所有夜市 details 到同一個json
-    # 定義存檔路徑，並確保資料夾存在（路徑基準見 ADR-0007）
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
     jsonfile_name = RAW_DATA_DIR / f"Taiwan_night_markets_from_map_api_{today}.json"

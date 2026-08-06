@@ -1,7 +1,7 @@
 -- 針對與行人直接相關的車禍案件，分析主要肇因比例分析表
 -- 1. 將車禍大類別 清得更乾淨。
 CREATE OR REPLACE VIEW v1_dim_accident_type AS
-	(SELECT 
+	(SELECT
 		d.*,
 		CASE
 			WHEN accident_type_major = "人與汽(機)車" THEN "人與車"
@@ -24,7 +24,7 @@ CREATE OR REPLACE VIEW v2_main_v1type AS
 					ON m.day_id = d.day_id
 						WHERE accident_type_major_grouped = "人與車");
 
-			
+
 -- 3. 將用路人身份大類別 清得更乾淨。然後與v2串接
 CREATE OR REPLACE VIEW v3_main_v1type_human AS
 	(SELECT v2.accident_year,
@@ -37,12 +37,12 @@ CREATE OR REPLACE VIEW v3_main_v1type_human AS
 				WHEN cause_analysis_major_individual = "非駕駛者" THEN "非駕駛者(行人或乘客)"
 				WHEN cause_analysis_major_individual = "駕駛人" THEN "駕駛者"
 				WHEN cause_analysis_major_individual = "無(車輛駕駛者因素)" THEN "駕駛者"
-				ELSE cause_analysis_major_individual          
+				ELSE cause_analysis_major_individual
 			END AS cause_analysis_major_individual_grouped
 		FROM fact_accident_human h
 			JOIN v2_main_v1type v2
 				ON h.accident_id = v2.accident_id);
-        
+
 -- 4. 建立Mart層圖表
 
 CREATE PROCEDURE swap_analysis_table()
@@ -53,7 +53,7 @@ BEGIN
     -- 建立 tmp 表
 	CREATE TABLE IF NOT EXISTS mart_quarterly_pedestrian_related_causes_top5_tmp AS
 		-- 使用Common Table Expression語法生成臨時資料表，並宣告為ranked_behaviors資料表
-		WITH ranked_behaviors AS 
+		WITH ranked_behaviors AS
 				(SELECT
 							accident_year,
 							accident_quarter,
@@ -68,7 +68,7 @@ BEGIN
 						GROUP BY accident_year, accident_quarter, `type of road user`, `behavior`
 				)
 			-- 主查詢區:
-			SELECT  accident_year, accident_quarter, 
+			SELECT  accident_year, accident_quarter,
 					`type of road user`, `behavior`, `counts of behavior`, `rank`
 				FROM ranked_behaviors
 					WHERE `rank` <= 5
@@ -85,7 +85,7 @@ BEGIN
     IF table_exists > 0 THEN
 
         -- 如果存在做table swap
-        RENAME TABLE 
+        RENAME TABLE
             mart_quarterly_pedestrian_related_causes_top5 TO mart_quarterly_pedestrian_related_causes_top5_deprecated,
             mart_quarterly_pedestrian_related_causes_top5_tmp TO mart_quarterly_pedestrian_related_causes_top5;
 
@@ -94,7 +94,7 @@ BEGIN
 
     ELSE
         -- 如果不存在直接rename tmp表為正式表
-        RENAME TABLE 
+        RENAME TABLE
             mart_quarterly_pedestrian_related_causes_top5_tmp TO mart_quarterly_pedestrian_related_causes_top5;
     END IF;
 END;

@@ -1,4 +1,24 @@
-"""MySQL 共用工具：SQLAlchemy Engine／pymysql 連線、綱要檢查與 upsert 寫入。"""
+"""MySQL 的唯一存取面：連線取得、Schema檢查、查詢與 upsert 寫入資料表。
+
+連線分兩種，有各自適用情境：
+
+- SQLAlchemy Engine 製作連線池，供 DQL 與 DDL 使用，
+且搭配資料庫名稱與 Engine 物件組成的全域變數，作為快取在行程內，
+防止對同一資料庫重複建立連線池。
+
+- pymysql 裸連線，專供批次 upsert 與 multistatement 使用。
+
+不論使用哪一種連線方式，一律需透過本模組的函式，且不要自行 `create_engine()`，
+也不要對取回的 Engine 呼叫 `dispose()`（那等於丟棄整個連線池）。
+
+連線設定取自環境變數:
+
+- 有預設值: `MYSQL_HOST`（localhost）、`MYSQL_PORT`（3306）
+- 必填: `MYSQL_USER`、`MYSQL_PASSWORD`，缺少時在建立連線的那一刻拋出
+
+Notes:
+    Engine 快取策略參考 ADR-0004，必填環境變數的檢查時機參考 ADR-0008。
+"""
 
 import os
 
@@ -23,14 +43,17 @@ password = os.getenv("MYSQL_PASSWORD")
 
 
 def _require_credentials() -> None:
-    """建立連線前確認必填設定存在（ADR-0008）。
+    """建立連線前確認必填的帳號密碼環境變數存在。
 
-    缺設定時若放任 None 往下走，連線字串會變成
-    `mysql+pymysql://None:None@...`，MySQL 回覆的是「認證失敗」——
-    排查方向會被帶往帳號權限，而真正的原因是環境變數少了一行。
+    先檢查再連線，錯誤訊息才會直指缺少的環境變數；若放任 `None` 往下走，
+    連線字串會變成 `mysql+pymysql://None:None@...`，MySQL 只會回覆認證失敗，
+    看不出真正的原因。
 
     Raises:
         ValueError: `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
+
+    Notes:
+        參考 ADR-0008。
     """
     if not username:
         raise ValueError("未設定 MYSQL_USER，請檢查環境變數設置")
@@ -39,14 +62,19 @@ def _require_credentials() -> None:
 
 
 def close_quietly(resource, resource_name: str) -> None:
-    """關閉資源，並確保關閉失敗不會取代正在傳播的例外（ADR-0005）。
+    """關閉資源，並確保關閉失敗不會取代正在傳播的例外。
 
-    供 `finally` 區塊呼叫：`close()` 自身可能拋例外（pymysql 在連線已斷時會），
-    裸呼叫會讓它取代 `except` 剛拋出的原始錯誤。
+    供 `finally` 區塊呼叫。`close()` 自身可能拋出例外（例如 pymysql 在連線
+    已斷開時），裸呼叫會讓這個次要錯誤取代 `except` 剛拋出的原始錯誤，
+    因此這裡把關閉失敗降級為 warning 並吞下。
 
-    Parameters:
-        resource: 任何具備 `close()` 的資源；`None` 時直接略過。
+    Args:
+        resource: 任何具備 `close()` 的資源，例如 `Connection` 物件；
+        若傳入 `None` 時直接略過。
         resource_name (str): 記錄於 warning 訊息中的資源名稱。
+
+    Notes:
+        參考 ADR-0005。
     """
     if resource is None:
         return
@@ -56,23 +84,27 @@ def close_quietly(resource, resource_name: str) -> None:
         logger.warning(f"Failed to close {resource_name}: {close_err}")
 
 
-# 以資料庫名為鍵的模組層 Engine 快取（ADR-0004）：
-# 每個 Engine 攜帶一個連線池，若每次呼叫都新建，池永遠不會服務第二個請求，
-# pool_size / pool_recycle / pool_pre_ping 三個設定形同虛設。
+# 以資料庫名為 key 的模組層全域變數， value 為 Engine 物件，
+# 作為 Engine 的快取功用，避免外部函式調用時浪費快取、建立過多新的連線池。
+# 連線池設定額外透過 _create_engine()。
 _ENGINES: dict[str | None, Engine] = {}
 
 
 def _create_engine(database: str | None = None) -> Engine:
     """建立一個連往 MySQL 的 SQLAlchemy Engine。
 
-    僅供 `get_engine_to_mysql()` 在快取未命中時呼叫。
-    外部請一律使用 `get_engine_to_mysql()`，以免繞過快取。
+    僅供 `get_engine_to_mysql()` 在 `_ENGINES` 中還沒有該資料庫的 Engine 時呼叫；
+    外部請一律使用 `get_engine_to_mysql()`，以免繞過快取而重複建立連線池。
 
-    Parameters:
-        database (str | None): The name of the database to connect to.
+    Args:
+        database (str | None): 要連往的資料庫名稱；`None` 代表不指定資料庫。
 
     Returns:
-        Engine: A SQLAlchemy Engine instance connected to the specified MySQL database.
+        Engine: 連往指定資料庫的 SQLAlchemy Engine，連線池大小 5、
+            每小時回收連線、取用前先探活。
+
+    Raises:
+        ValueError: `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
     """
     _require_credentials()
 
@@ -96,15 +128,22 @@ def _create_engine(database: str | None = None) -> Engine:
 def get_engine_to_mysql(database: str | None = None) -> Engine:
     """取得連往指定資料庫的 SQLAlchemy Engine，同一資料庫在行程內共用同一個。
 
-    Engine 內含連線池，生命週期與行程等長，因此不需要（也不應該）由呼叫端
-    `dispose()`。未命中快取時才會真的建立，日誌因此可直接證明池只建立一次。
+    本專案 Engine 的連線池生命週期與行程基本上等長，因此不需要（也不應該）由呼叫端
+    `dispose()`。只有 `_ENGINES` 中還沒有該資料庫的 Engine 時才會真的建立，
+    並留下一行 info 日誌。
 
-    Parameters:
-        database (str | None): The name of the database to connect to.
-            `None` 代表不指定資料庫（例如建立資料庫本身時）。
+    Args:
+        database (str | None): 要連往的資料庫名稱；`None` 代表不指定資料庫
+            （例如要建立資料庫本身時）。
 
     Returns:
-        Engine: A SQLAlchemy Engine instance connected to the specified MySQL database.
+        Engine: 連往指定資料庫的 SQLAlchemy Engine。
+
+    Raises:
+        ValueError: 首次建立時 `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
+
+    Notes:
+        參考 ADR-0004。
     """
     if database not in _ENGINES:
         logger.info(f"==== Creating SQLAlchemy Engine for database `{database}` ====")
@@ -115,15 +154,37 @@ def get_engine_to_mysql(database: str | None = None) -> Engine:
 def get_table_from_sqlserver(
     dql_str: str, params: dict | None = None, *, database: str | None = None
 ) -> pd.DataFrame:
-    """以 DQL 查詢 MySQL 資料表並回傳 DataFrame。
+    """執行 SELECT 查詢並把結果包成 DataFrame 回傳。
 
-    Parameters:
-        dql_str (str): 要執行的 DQL（SELECT）敘述。
-        params (dict | None): 綁定至敘述中具名佔位符的參數。
+    全專案查詢 MySQL 的統一入口。
+
+    Args:
+        dql_str (str): 要執行的 SELECT 敘述，named placeholder 必須寫成 `:name`。
+        params (dict | None): 對應 named placeholder 的參數；一律用它傳值，
+            請不要把值直接內插進 SQL 字串。
         database (str | None): 資料表所在的資料庫名稱。
 
     Returns:
-        pandas.DataFrame: 查詢結果；欄位名取自查詢回傳的欄位。
+        pandas.DataFrame: 查詢結果；查無資料時為帶欄位名的空 DataFrame。
+
+    Raises:
+        SQLAlchemyError: 連線失敗或 SQL 執行失敗，原樣往外拋。
+
+    Examples:
+        以下查詢：
+
+            get_table_from_sqlserver(
+                "SELECT city, COUNT(*) AS cnt FROM fact_accident_main "
+                "WHERE year = :year GROUP BY city",
+                params={"year": 113},
+                database="traffic_accident",
+            )
+
+        回傳的 DataFrame 形如：
+
+            city    cnt
+            臺北市  12034
+            新北市  18876
     """
     engine = get_engine_to_mysql(database)
 
@@ -134,15 +195,21 @@ def get_table_from_sqlserver(
 
 
 def get_pymysql_conn_to_mysql(database: str | None) -> Connection:
-    """Create a pymysql Connection to connect to a MySQL database.
+    """建立一條連往 MySQL 的 pymysql 裸連線，供批次寫入使用。
 
-    More suitable for Upserting than using Pandas.to_sql().
+    因批次 upsert 走 `cursor.executemany()` 比 `DataFrame.to_sql()` 快得多，
+    因此寫入路徑用此連線而非 Engine。
+    注意必須手動 `commit` 或 `rollback`，並請在 `finally` 中以 `close_quietly()` 收尾。
 
-    Parameters:
-        database (str | None): The name of the database to connect to.
+    Args:
+        database (str | None): 要連往的資料庫名稱。
 
     Returns:
-        Connection: A pymysql Connection instance connected to the specified MySQL database.
+        Connection: 已連上指定資料庫的 pymysql 連線，`autocommit` 為關閉，
+
+    Raises:
+        ValueError: `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
+        pymysql.MySQLError: 連線建立失敗（主機不可達、認證失敗、逾時）。
     """
     _require_credentials()
 
@@ -162,15 +229,23 @@ def get_pymysql_conn_to_mysql(database: str | None) -> Connection:
 
 
 def get_pymysql_conn_to_mysql_multistatement(database: str | None) -> Connection:
-    """Create a pymysql Connection to connect to a MySQL database.
+    """建立一條允許一次送出多句 SQL 的 pymysql 裸連線。
 
-    More suitable for Upserting than using Pandas.to_sql().
+    與 `get_pymysql_conn_to_mysql()` 的差別只在多帶 `CLIENT.MULTI_STATEMENTS`，
+    讓一個 `execute()` 能執行以分號分隔的多句敘述。供 mart 層 SQL 腳本使用，
+    那些腳本是整份檔案一次執行的。
+    注意必須手動 `commit` 或 `rollback`，並請在 `finally` 中以 `close_quietly()` 收尾。
 
-    Parameters:
-        database (str | None): The name of the database to connect to.
+    Args:
+        database (str | None): 要連往的資料庫名稱。
 
     Returns:
-        Connection: A pymysql Connection instance connected to the specified MySQL database.
+        Connection: 已連上指定資料庫、允許 multistatement 的 pymysql 連線，
+            `autocommit` 為關閉。
+
+    Raises:
+        ValueError: `MYSQL_USER` 或 `MYSQL_PASSWORD` 未設定。
+        pymysql.MySQLError: 連線建立失敗（主機不可達、認證失敗、逾時）。
     """
     _require_credentials()
 
@@ -191,32 +266,39 @@ def get_pymysql_conn_to_mysql_multistatement(database: str | None) -> Connection
 
 
 def inspect_table_exists(conn, table_name: str) -> bool:
-    """Inspect if the specified table_name already exists in the connected database.
+    """檢查資料表是否已存在於連線所指的資料庫中。
 
-    Parameters:
-        conn (Connection): A SQLAlchemy Connection instance connected with MySQL server (with specified database)
-        table_name (str): The name of table to be inspected whether exists or not.
+    Args:
+        conn: 已指定資料庫的 SQLAlchemy 連線。
+        table_name (str): 要檢查的資料表名稱。
 
     Returns:
-        bool: A boolean value indicating if the table exists. True if exists, false if not exists.
+        bool: 資料表已存在為 `True`，不存在為 `False`。
     """
     logger.info(f"Checking Table existence {table_name}.....")
     inspector = inspect(conn)
-    # 或是執行 SQL 查詢:
-    # select table_name
-    # from information_schema.tables
-    # 	where table_schema = "你的資料庫名稱";
+    # 相當於執行 SQL 查詢:
+    # select "target_table_name" in
+    #       (select table_name
+    #           from information_schema.tables
+    # 	            where table_schema = "你的資料庫名稱");
 
     return table_name in inspector.get_table_names()
 
 
 def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
-    """Inspect the schema, total row counts and preview the first 3 data rows.
+    """把資料表的 Schema、總筆數與前三列資料寫進日誌，供人工檢視。
 
-    Parameters:
-        engine (Engine): SQLAlchemy Engine instance connected to MySQL server (with specifying database)
-        db_name (str): The name of the database where the table is located.
-        table_name (str): The name of the table to inspect.
+    只作為排查與驗收用途，不回傳任何值，所有結果都以 info 日誌輸出。
+
+    Args:
+        engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+        db_name (str): 資料表所在的資料庫名稱。
+        table_name (str): 要檢視的資料表名稱。
+
+    Raises:
+        Exception: 查詢過程中的任何錯誤，記下 error 後原樣往外拋
+            （常見情況是資料表不存在）。
     """
     full_table_path = f"`{db_name}`.`{table_name}`"
     logger.info(f"Checking Table: {full_table_path}.....")
@@ -224,6 +306,23 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
     def _extracted_from_inspect_table(
         full_table_path: str, conn: Connection
     ) -> str | pd.DataFrame:
+        """依序記錄 Schema 與筆數，並回傳前三列資料。
+
+        Args:
+            full_table_path (str): 以反引號括起的完整資料表路徑。
+                例如: `資料庫名`.`資料表名稱`
+            conn (Connection): 已開啟的 SQLAlchemy 連線。
+
+        Returns:
+            str | pandas.DataFrame: 資料表有資料時回傳前三列的 DataFrame，
+                形如：
+
+                    accident_id  city    deaths
+                    1130101001   臺北市  0
+                    1130101002   新北市  1
+
+                資料表為空時回傳說明字串 " This table is currently empty."。
+        """
         # 1. 型態與索引檢查
         logger.info("[1. Schema Definition]")
         schema = pd.read_sql(text(f"DESC {full_table_path}"), conn)
@@ -253,11 +352,18 @@ def inspect_table(engine: Engine, db_name: str, table_name: str) -> None:
 
 
 def create_database(engine: Engine, database_name: str) -> None:
-    """Inspect if the designed MySQL database exists and create it if not exists.
+    """建立資料庫，已存在時不做任何事。
 
-    Parameters:
-        engine (Engine): SQLAlchemy Engine instance connected to MySQL server (without specifying database)
-        database_name (str): The name of the database to be created regardless of existing.
+    以 `CREATE DATABASE IF NOT EXISTS` 執行，字元集固定為 utf8mb4；
+    連線以 AUTOCOMMIT 隔離級別開啟，避免建立資料庫的語句被包在事務中。
+
+    Args:
+        engine (Engine): 未指定資料庫的 SQLAlchemy Engine。
+        database_name (str): 要建立的資料庫名稱。
+
+    Raises:
+        SQLAlchemyError: 建立失敗（權限不足、連線中斷等），記下 error 後原樣往外拋。
+        Exception: 其他非預期錯誤，同樣記下 error 後原樣往外拋。
     """
     logger.info(f"==== Checking/Creating database: '{database_name}' ====")
 
@@ -286,19 +392,19 @@ def create_database(engine: Engine, database_name: str) -> None:
 
 
 def create_tables(engine: Engine, tables: dict[str, str]) -> None:
-    """依傳入的 DDL 建立資料表；已存在的資料表會被跳過。
+    """依傳入的 DDL 逐一建立資料表，已存在的資料表會被跳過，含 commit、rollback 與連線關閉。
 
-    以 `inspect_table_exists()` 先行檢查，因此日誌能精確區分
-    「已存在、略過」與「本次建立」—— 這是 `CREATE TABLE IF NOT EXISTS`
-    單獨使用時做不到的。
+    每張表都先用 `inspect_table_exists()` 檢查再決定是否執行 DDL，
+    目的是讓日誌寫入時能區分「已存在、略過」與「本次建立」。
 
-    Parameters:
+    Args:
         engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
         tables (dict[str, str]): 資料表名稱對應其 `CREATE TABLE` 敘述。
             鍵必須與 DDL 實際建立的資料表同名，存在性檢查才會正確。
 
     Raises:
-        SQLAlchemyError: DDL 執行失敗，事務已由 `engine.begin()` 自動復原。
+        SQLAlchemyError: DDL 執行失敗，事務已由 `engine.begin()` 自動復原後往外拋。
+        Exception: 其他非預期錯誤，同樣記下 error 後原樣往外拋。
     """
     logger.info("==== Starting creation of tables... ====")
 
@@ -329,21 +435,25 @@ def upsert_to_table(
     update_columns: list[str],
     database: str | None = None,
 ) -> None:
-    """以 UPSERT（INSERT ... ON DUPLICATE KEY UPDATE）將 DataFrame 寫入 MySQL 資料表。
+    """把 DataFrame 整批寫入 MySQL 資料表，主鍵重複時改為更新，含 commit、rollback 與連線關閉。
 
-    提供事務復原機制，並原樣拋出原始的資料庫錯誤，
-    讓 traceback 完整保留給呼叫端（Airflow task log 或地端 stderr）。
+    全專案寫入 MySQL 的統一入口，`l_*` 系列 task 都經由它落地。SQL 以
+    `INSERT ... ON DUPLICATE KEY UPDATE` 組成、走 `executemany()` 一次送出，
+    因此同一批資料重跑不會產生重複列。寫入失敗會先復原事務再原樣往外拋，
+    讓 traceback 完整保留給呼叫端（Airflow task 日誌或地端 stderr）。
 
-    Parameters:
-        df (pandas.DataFrame): 待寫入的資料；欄位名須與目標資料表一致。
+    Args:
+        df (pandas.DataFrame): 待寫入的資料，欄位名須與目標資料表一致，
+            欄位順序即 INSERT 的欄位順序。
         table (str): 目標資料表名稱。
-        update_columns (list[str]): 主鍵衝突時要更新的欄位名，
-            會被組成 `col=VALUES(col)` 片段。不可為空。
+        update_columns (list[str]): 主鍵衝突時要更新的欄位名，會被組成
+            `col=VALUES(col)` 片段；不可為空。
         database (str | None): 資料表所在的資料庫名稱。
 
     Raises:
-        ValueError: `update_columns` 為空時，SQL 無法組成。
-        pymysql.MySQLError: 寫入失敗，事務已復原後原樣拋出。
+        ValueError: `update_columns` 為空，SQL 無法組成。
+        pymysql.MySQLError: 寫入失敗，事務復原後原樣往外拋。
+        Exception: 其他非預期錯誤，同樣復原事務後往外拋。
     """
     if not update_columns:
         raise ValueError(f"upsert 至 `{table}` 需要至少一個 update_columns 欄位")

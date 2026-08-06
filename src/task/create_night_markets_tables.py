@@ -1,11 +1,16 @@
-"""建立夜市事實表的 DDL 宣告。"""
+"""夜市事實表的 DDL 宣告與建表函式。
+
+`NIGHT_MARKET_TABLES` 以「資料表名稱對應 CREATE TABLE 敘述」的形式定義
+`fact_night_markets`，內容為全臺夜市的地理位置、營業時間與 Google 地圖資訊。
+唯一鍵是「緯度 + 經度 + 營業星期」的組合，因此同一個夜市的不同營業日各佔一列。
+字典的鍵必須與 DDL 實際建立的資料表同名，`create_tables()` 的存在性檢查才會正確。
+"""
 
 from sqlalchemy import Engine
 
 from src.util.mysql_utils import create_tables
 
-# 表名 -> CREATE TABLE 敘述。鍵必須與 DDL 實際建立的表同名，
-# create_tables() 的存在性檢查才會正確。
+# key 必須與 DDL 實際建立的表同名，因為 create_tables() 會以它在內部做 IF EXISTS 檢查。
 NIGHT_MARKET_TABLES = {
     "fact_night_markets": """CREATE TABLE IF NOT EXISTS `fact_night_markets`(
                         `nightmarket_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '夜市代碼',
@@ -37,9 +42,12 @@ NIGHT_MARKET_TABLES = {
 
 
 def create_night_market_tables(engine: Engine) -> None:
-    """建立夜市事實表 `fact_night_markets`（已存在則略過）。
+    """建立夜市事實表 `fact_night_markets`，已存在則略過。
 
-    Parameters:
+    Args:
         engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+
+    Raises:
+        SQLAlchemyError: DDL 執行失敗，事務復原後往外拋。
     """
     create_tables(engine, NIGHT_MARKET_TABLES)

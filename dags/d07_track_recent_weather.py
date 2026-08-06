@@ -1,4 +1,11 @@
-"""d07：抓取本年度至今的天氣觀測，並載入 MySQL。"""
+"""DAG d07：抓取本年度至今的天氣觀測，並載入 MySQL。
+
+每月 3 號與 18 號的 07:00 各跑一次：3 號抓剛完成的上個月（該月最後一天已進入
+API 查得到的範圍，因此判定為抓完整、之後不再重抓），18 號抓當月 1 到 15 日。
+
+頻率的依據是事故資料兩週發布一次 —— 天氣是掛在事故上的，抓得比事故新沒有意義。
+四個 task 串成：取觀測點 → 制訂批次 → 分批抓取 → 清洗載入。歷年的回補在 d08。
+"""
 
 import os
 from datetime import datetime, timedelta, timezone
@@ -42,7 +49,7 @@ default_args = {
     tags=["traffic", "weatherapi", "taskflow"],
 )
 def accident_weather_pipeline():
-    """串接本年度天氣 ETL：取觀測點 -> 制訂批次 -> 抓取 -> 清洗載入。"""
+    """串接本年度的天氣 ETL：取觀測點、制訂批次、分批抓取、清洗載入。"""
     this_year = 2026
     database = os.getenv("MYSQL_DATABASE")
 
@@ -52,12 +59,41 @@ def accident_weather_pipeline():
         execution_timeout=timedelta(minutes=30),
     )
     def task_e_get_uniq_acc_geo(target_year: int, database: str | None):
+        """查出該年度事故發生地的座標，進位到氣象網格後去重。
+
+        Args:
+            target_year (int): 要查詢的年份。
+            database (str | None): 資料表所在的資料庫名稱。
+
+        Returns:
+            pandas.DataFrame: 去重後的觀測點清單，含 `lat_round`、`lon_round` 兩欄。
+
+        Raises:
+            SQLAlchemyError: 查詢失敗。
+        """
         return e_get_uniq_acc_geo(target_year, database=database)
 
     @task
     def task_prep_batch_plan(
         df_acc_unique_loc, target_year: int, batch_size: int
     ) -> list[dict]:
+        """盤點還缺哪些「觀測點 × 月」，切成批次並存下各批清單。
+
+        Args:
+            df_acc_unique_loc (pandas.DataFrame): 去重後的觀測點清單。
+            target_year (int): 要盤點的年份。
+            batch_size (int): 幾個觀測點切成一批。
+
+        Returns:
+            list[dict]: 每個元素是一批的參數，供 `expand_kwargs()` 展開；
+                空 list 代表該年度已全部抓完，是正常結果。
+
+        Raises:
+            GoogleAPIError: 盤點或寫入暫存檔失敗。
+
+        Notes:
+            回傳值設計，參考 ADR-00013。
+        """
         return prep_batch_plan(df_acc_unique_loc, target_year, batch_size)
 
     @task(
@@ -71,25 +107,55 @@ def accident_weather_pipeline():
         do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
     )
     def task_e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
+        """抓取一批觀測點在某個月的天氣觀測，逐點存成 GCS Parquet。
+
+        以 `expand_kwargs()` 動態展開，一個實例就是一批觀測點乘一個月。task 設定
+        走專屬的 pool 控管併發，重試採指數退避，因為 API 額度的限流窗口是分鐘到
+        小時等級。
+
+        Args:
+            batch_id (int): 批號。
+            target_year (int): 年份。
+            month (int): 月份，1～12。
+
+        Returns:
+            str: 天氣資料所在的 GCS bucket 名稱。
+
+        Raises:
+            RuntimeError: 回傳筆數與請求的地點數不符，或寫入失敗率過高。
+            requests.exceptions.RequestException: 請求失敗且重試耗盡（含額度用盡的 429）。
+        """
         return e_crawler_weatherapi(batch_id, target_year, month)
 
     @task(
         retries=2,
         retry_delay=timedelta(minutes=10),
         execution_timeout=timedelta(hours=4),
-        # 抓取被額度打斷是這個設計的正常狀態，不是故障 —— 首次回補必然跨多次
-        # DAG run 才抓得完。已經落地 GCS 的資料要先進 MySQL，不必等全部抓完
-        # （ADR-0013 決策六）。
         trigger_rule="all_done",
     )
     def task_t_and_l_weather(target_year: int, database: str | None) -> None:
+        """讀取 GCS 上該年度的天氣觀測，分批清洗後寫入 `fact_hourly_weather`。
+
+        觸發條件是上游全部結束（不論成敗），因為抓取被 API 額度打斷是這個設計的
+        正常狀態，已經落地 GCS 的資料要先進 MySQL，不必等全部抓完。
+
+        Args:
+            target_year (int): 要清洗並寫入的年份。
+            database (str | None): 目標資料庫名稱。
+
+        Raises:
+            RuntimeError: 該年度在 GCS 上找不到任何檔案，或損壞檔案比例過高。
+            pymysql.MySQLError: 寫入失敗。
+
+        Notes:
+            trigger_rule="all_done" 參考 ADR-00013。
+        """
         l_fact_hourly_weather(target_year, database=database, batch_size=50)
 
     with TaskGroup(group_id=f"year_{this_year}"):
         df = task_e_get_uniq_acc_geo(this_year, database)
         batches = task_prep_batch_plan(df, this_year, 50)
         # MappedOperator。一個 mapped instance = 一批觀測點 × 一個月，
-        # 參數由 prep_batch_plan() 以 dict 排好（ADR-0013 決策四）。
         craw_done = task_e_crawler_weatherapi.expand_kwargs(batches)
 
         load_done = task_t_and_l_weather(this_year, database)

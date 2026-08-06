@@ -1,11 +1,17 @@
-"""建立天氣觀測事實表的 DDL 宣告。"""
+"""天氣觀測事實表的 DDL 宣告與建表函式。
+
+`WEATHER_TABLES` 以「資料表名稱對應 CREATE TABLE 敘述」的形式定義
+`fact_hourly_weather`，一列是一個觀測點在某個整點的天氣。經緯度存的是已進位到
+氣象網格的座標，並各自建索引，供事故資料依時間與位置比對天氣。
+唯一鍵是 `hash_value`，由觀測時間與座標湊出，確保重跑不會產生重複列。
+字典的鍵必須與DDL 實際建立的資料表同名，`create_tables()` 的存在性檢查才會正確。
+"""
 
 from sqlalchemy import Engine
 
 from src.util.mysql_utils import create_tables
 
-# 表名 -> CREATE TABLE 敘述。鍵必須與 DDL 實際建立的表同名，
-# create_tables() 的存在性檢查才會正確。
+# key 必須與 DDL 實際建立的表同名，因為 create_tables() 會以它在內部做 IF EXISTS 檢查。
 WEATHER_TABLES = {
     "fact_hourly_weather": """CREATE TABLE IF NOT EXISTS `fact_hourly_weather`(
                         `weather_record_id` BIGINT AUTO_INCREMENT,
@@ -31,9 +37,12 @@ WEATHER_TABLES = {
 
 
 def create_weather_tables(engine: Engine) -> None:
-    """建立天氣觀測事實表 `fact_hourly_weather`（已存在則略過）。
+    """建立天氣觀測事實表 `fact_hourly_weather`，已存在則略過。
 
-    Parameters:
+    Args:
         engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+
+    Raises:
+        SQLAlchemyError: DDL 執行失敗，事務復原後往外拋。
     """
     create_tables(engine, WEATHER_TABLES)

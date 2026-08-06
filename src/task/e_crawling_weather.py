@@ -1,4 +1,25 @@
-"""Extract 階段：向 OpenMeteo 取得事故地點的逐小時天氣觀測，落地為 GCS Parquet。"""
+"""Extract 階段：向 OpenMeteo 取得事故地點的逐小時天氣觀測，落地為 GCS Parquet。
+
+流程是三段：先從 `fact_accident_main` 取出事故座標並進位到氣象網格，再盤點
+GCS 上還缺哪些「觀測點 × 月」並切成批次，最後逐批向 OpenMeteo 請求該月天氣
+並把每個觀測點存成一個 Parquet。
+
+GCS 上的路徑本身就是抓取進度表，因此不需要另一份狀態：
+
+    weather_cache_final/{年}/data/{年}-{月}/25-05_121-55.parquet   ← 該觀測點該月已抓到
+    weather_cache_final/{年}/tmp/{年}-{月}/batch_no_{批號}.parquet  ← 批次清單的交接檔
+
+有三件事全模組一致，否則資料會靜默對不上：經緯度一律經 `round_to_weather_grid()`
+進位；檔名一律經 `blob_file_name()` 組出（盤點與存檔兩處同一支）；「某月是否
+抓完整」一律由 `is_month_complete()` 判定，因為 API 有 3 天延遲，用「月已過去」
+會讓每個月的最後 3 天永久缺失。
+
+OpenMeteo 免費層有分、時、日三個限流窗口且呼叫次數是加權計費的，因此 429
+不在本模組重試，改由 Airflow task 層的重試與下一次 DAG run 續跑。
+
+Notes:
+    經緯度進位參考 ADR-0012，抓取進度與批次切法參考 ADR-0013。
+"""
 
 import random
 import time
@@ -57,38 +78,57 @@ API_LAG_DAYS = 3
 
 
 def round_to_weather_grid(series: pd.Series) -> pd.Series:
-    """將經緯度進位到氣象網格（ADR-0012）。
+    """把經緯度進位到 0.05 度的氣象網格。
 
-    事故資料與天氣資料最後要 merge，兩邊的經緯度都必須用這支函式算出來。
-    只要有一邊用了別的算法，join 會一列都對不上，而且不會報錯。
+    事故資料與天氣資料最後要 merge，兩邊的經緯度都必須經由這支函式算出來；
+    只要有一邊用了別的算法，merge 會一列都對不上而且不會報錯。
 
-    末尾的 `.round(2)` 是必要的：`24.13 / 0.05` 取整後乘回去，浮點運算可能
-    得到 `24.150000000000002`，而 hash 是拿字串算的（見 `t_fact_hourly_weather`），
-    多出來的尾數會讓兩邊算出不同的 hash。
+    結果會再取到小數第二位，因為除以 0.05 取整後乘回去的浮點誤差可能產生
+    `24.150000000000002` 這樣的值，而下游的 hash 是拿字串算的，多出來的尾數
+    會讓兩邊算出不同的 hash。
 
-    Parameters:
+    Args:
         series (pandas.Series): 原始的經度或緯度。
 
     Returns:
-        pandas.Series: 進位到 `GRID_STEP` 網格後的值。
+        pandas.Series: 進位到網格後的值，形如 `[25.05, 24.15, 22.60]`。
+
+    Notes:
+        參考 ADR-0012。
     """
     scaled = series.astype("float64") / GRID_STEP
     return (scaled.round() * GRID_STEP).round(2)
 
 
 def _year_prefix(target_year: int) -> str:
-    """該年度天氣資料在 GCS 上的根前綴。"""
+    """組出該年度天氣資料在 GCS 上的根前綴。
+
+    Args:
+        target_year (int): 年份。
+
+    Returns:
+        str: 形如 `"weather_cache_final/2024"` 的前綴。
+    """
     return f"weather_cache_final/{target_year}"
 
 
 def _batch_object(target_year: int, month: int, batch_id: int) -> str:
-    """批次經緯度清單的暫存物件路徑。
+    """組出批次經緯度清單的暫存物件路徑。
 
-    這份暫存檔的存在理由是 Airflow 的 dynamic task mapping：
-    `expand_kwargs()` 只適合傳純量，DataFrame 走 XCom 會過長，
-    因此以（月, 批號）為鍵、把 DataFrame 放在 GCS 上交接。
+    這份暫存檔是兩個 task 之間的交接：Airflow 的 `expand_kwargs()` 只適合傳
+    純量，DataFrame 走 XCom 會過長，因此改以（月, 批號）為鍵放在 GCS 上。
+    路徑必須帶月份，否則不同月的同號批次會互相覆蓋。
 
-    路徑必須帶月份 —— 不同月的同號批次否則會互相覆蓋（ADR-0013）。
+    Args:
+        target_year (int): 年份。
+        month (int): 月份，1～12。
+        batch_id (int): 批號。
+
+    Returns:
+        str: 形如 `"weather_cache_final/2024/tmp/2024-01/batch_no_0.parquet"` 的路徑。
+
+    Notes:
+        參考 ADR-0013。
     """
     return (
         f"{_year_prefix(target_year)}/tmp/"
@@ -97,97 +137,129 @@ def _batch_object(target_year: int, month: int, batch_id: int) -> str:
 
 
 def weather_data_prefix(target_year: int, month: int | None = None) -> str:
-    """天氣觀測結果的 GCS 前綴；給了月份就縮到該月。
+    """組出天氣觀測結果的 GCS 前綴，給了月份就縮到該月。
 
-    月份放進路徑，是為了讓「GCS 上有哪些檔案」本身就是完整的抓取進度 ——
-    不需要第二份狀態，也不需要下載檔案內容才知道涵蓋到哪一天（ADR-0013）。
+    月份放進路徑，「GCS 上有哪些檔案」本身就是完整的抓取進度，不必另存一份
+    狀態，也不必下載檔案內容才知道涵蓋到哪一天。
 
-    Parameters:
+    Args:
         target_year (int): 年份。
-        month (int | None): 月份，1～12。不指定則回傳涵蓋整年的前綴 ——
-            L 階段列整年的檔案時用它（各月子路徑靠 GCS 的遞迴列舉一併帶出）。
+        month (int | None): 月份，1～12；不指定則回傳涵蓋整年的前綴，
+            載入階段要列出整年的檔案時用它。
 
     Returns:
-        str: 不含 bucket 名稱的物件路徑前綴。
+        str: 不含 bucket 名稱的物件路徑前綴，形如
+            `"weather_cache_final/2024/data/2024-01"`；未指定月份時為
+            `"weather_cache_final/2024/data"`。
+
+    Notes:
+        參考 ADR-0013。
     """
     prefix = f"{_year_prefix(target_year)}/data"
     return prefix if month is None else f"{prefix}/{target_year}-{month:02d}"
 
 
 def blob_file_name(lat: float, lon: float) -> str:
-    """一個觀測點的 Parquet 檔名。
+    """組出一個觀測點的 Parquet 檔名。
 
-    `prep_batch_plan()` 用它組出「該有哪些檔案」，`e_crawler_weatherapi()`
-    用它決定「要存成什麼檔名」—— 兩處必須是同一支函式。
+    `prep_batch_plan()` 用它算出「該有哪些檔案」、`e_crawler_weatherapi()` 用它
+    決定「要存成什麼檔名」，兩處必須是同一支函式，續跑時的比對才會成立。
+    檔名不帶批號，因為批號隨每次 run 的待抓清單浮動，同一個觀測點會落在不同
+    批號而產生重複檔案。
 
-    ADR-0013 之前兩處各自組字串且對不上（存檔多了 `cralwer_batch_{批號}_` 前綴），
-    因此 `isin(existing_files)` 恆為 False，續跑的排除從未生效過。
-    檔名也不再帶批號 —— 批號隨每次 run 的待抓清單浮動，同一個觀測點會落在
-    不同批號而產生重複檔案。
+    Args:
+        lat (float): 已進位到氣象網格的緯度。
+        lon (float): 已進位到氣象網格的經度。
+
+    Returns:
+        str: 形如 `"25-05_121-55.parquet"` 的檔名，小數點以連字號取代。
+
+    Notes:
+        參考 ADR-0013。
     """
     return f"{str(lat).replace('.', '-')}_{str(lon).replace('.', '-')}.parquet"
 
 
 def _month_last_day(target_year: int, month: int) -> date:
-    """該月最後一天。"""
+    """取得該月的最後一天。
+
+    Args:
+        target_year (int): 年份。
+        month (int): 月份，1～12。
+
+    Returns:
+        date: 該月最後一天，例如 2024 年 2 月為 `date(2024, 2, 29)`。
+    """
     return date(target_year, month, monthrange(target_year, month)[1])
 
 
 def _latest_available_date_from_api(today: date) -> date:
-    """OpenMeteo 目前查得到的最新日期。"""
+    """算出 OpenMeteo 目前查得到的最新日期。
+
+    歷史觀測有 3 天延遲，因此是今天往前推 3 天。
+
+    Args:
+        today (date): 今天的日期（台北時區）。
+
+    Returns:
+        date: 查得到的最新日期。
+    """
     return today - timedelta(days=API_LAG_DAYS)
 
 
 def is_month_complete(target_year: int, month: int, today: date) -> bool:
-    """該月是否已經抓得完整，之後不必再重抓。
+    """判斷某個月是否已抓得完整，完整的月之後不必再重抓。
 
-    判準是「該月最後一天已落在 API 查得到的範圍內」，**不是**「該月已經過去」。
-
+    判準是「該月最後一天已落在 API 查得到的範圍內」，而不是「該月已經過去」。
     用後者會讓每個月的最後 3 天永遠抓不到：1/31 的 run 只請求得到 1/28，
-    2/03 的 run 若認為一月已過去就會跳過它，1/29～1/31 因此永久缺失，
-    而且檔案在、載入照常，完全看不出來（ADR-0013 決策三）。
+    2/03 的 run 若認為一月已過去就會跳過它，1/29～1/31 因此永久缺失，而且
+    檔案在、載入照常，完全看不出來。
 
-    Parameters:
+    Args:
         target_year (int): 年份。
         month (int): 月份，1～12。
         today (date): 今天的日期（台北時區）。
 
     Returns:
-        bool: 該月是否已抓完整。
+        bool: 已抓完整為 `True`，否則為 `False`。
+
+    Notes:
+        參考 ADR-0013。
     """
     return _month_last_day(target_year, month) <= _latest_available_date_from_api(today)
 
 
 def months_to_fetch(target_year: int, today: date) -> list[int]:
-    """該年度有哪些月份需要抓取。
+    """列出該年度有哪些月份需要抓取。
 
-    以「該月一號已落在 API 查得到的範圍內」為準，因此尚未開始的月份不會入列。
+    以「該月一號已落在 API 查得到的範圍內」為準，因此尚未開始的月份不會入列，
     未來年份會得到空 list。
 
-    Parameters:
+    Args:
         target_year (int): 年份。
         today (date): 今天的日期（台北時區）。
 
     Returns:
-        list[int]: 需要抓取的月份，由小到大。
+        list[int]: 需要抓取的月份，由小到大，形如 `[1, 2, 3, 4, 5, 6, 7]`。
     """
     latest = _latest_available_date_from_api(today)
     return [m for m in range(1, 13) if date(target_year, m, 1) <= latest]
 
 
 def month_date_range(target_year: int, month: int, today: date) -> tuple[str, str]:
-    """該月要向 API 請求的起訖日期，格式 `YYYY-MM-DD`。
+    """算出該月要向 API 請求的起訖日期。
 
-    迄日取「該月最後一天」與「API 查得到的最新日期」之中較早的那個 ——
-    當月尚未結束時請求到月底，API 會回傳 None。
+    起日固定是該月一號；迄日取「該月最後一天」與「API 查得到的最新日期」之中
+    較早的那個，因為當月尚未結束時請求到月底，API 會回傳空值。
 
-    Parameters:
+    Args:
         target_year (int): 年份。
         month (int): 月份，1～12。
         today (date): 今天的日期（台北時區）。
 
     Returns:
-        tuple[str, str]: (起日, 迄日)。
+        tuple[str, str]: 格式為 `YYYY-MM-DD` 的（起日, 迄日），形如
+            `("2024-01-01", "2024-01-31")`。
     """
     start = date(target_year, month, 1)
     end = min(
@@ -197,23 +269,25 @@ def month_date_range(target_year: int, month: int, today: date) -> tuple[str, st
 
 
 def _should_retry(exc: BaseException) -> bool:
-    """判斷是否值得重試；429 刻意排除（ADR-0006）。
+    """判斷例外是否值得在本模組重試，429 刻意排除在外。
 
-    OpenMeteo 免費層有三個限流窗口 —— 每分鐘 600、每小時 5,000、每日 10,000 ——
-    且呼叫次數是**加權**的：成本隨時間區間、地點數、變數數上升，以小數計。
+    OpenMeteo 免費層有每分鐘 600、每小時 5,000、每日 10,000 三個限流窗口，
+    且呼叫次數是加權計費的（實測約 1 次額度對應 25 個「觀測點 × 天」），
+    先綁定的通常是每小時額度。因此 429 需要等待的尺度是分鐘到小時，而本模組
+    的退避只有幾秒，在這裡重試必然徒勞；跨過小時窗口靠 Airflow task 層的重試
+    （20、40、80 分），跨過日窗口靠下一次 DAG run 由 `prep_batch_plan()` 續跑。
 
-    2026-08-05 實跑 d07 量到的換算是 **1 次額度 ≈ 25 個「觀測點 × 天」**
-    （一批 50 個觀測點 × 214 天約 526 次）。被 429 擋掉的請求也計入額度。
-    先綁定的是**每小時**額度，不是每日。
+    其餘暫時性故障（連線中斷、逾時、5xx）則相反，幾秒的退避往往就能自癒，
+    在這裡重試可以省下一輪 Airflow task 層的等待。
 
-    這意味著 429 需要等待的尺度是分鐘到小時，而 `RETRY_WAIT` 只有 2、4 秒 ——
-    在這裡重試必然徒勞，只會在 log 裡留下三筆永遠不會成功的紀錄。
-    跨過小時窗口的是 Airflow task 層的重試（20 → 40 → 80 分）；
-    跨過日窗口的則是下一次 DAG run —— `prep_batch_plan()` 會排除
-    GCS 上已完成的（觀測點, 月），自動從斷點續跑（ADR-0013）。
+    Args:
+        exc (BaseException): 要判斷的例外。
 
-    其餘暫時性故障（連線中斷、逾時、5xx）則相反 —— 幾秒的退避往往就能自癒，
-    在此重試可以省下一輪 Airflow task 層的重試（間隔 20 分鐘起跳）。
+    Returns:
+        bool: 值得重試為 `True`；429 與永久性故障為 `False`。
+
+    Notes:
+        參考 ADR-0006 與 ADR-0013。
     """
     response = getattr(exc, "response", None)
     if response is not None and response.status_code == 429:
@@ -237,12 +311,13 @@ def _request_weather_api(
     end_date: str,
     variables: list[str],
 ) -> list[dict]:
-    """向 OpenMeteo 請求一批地點的逐小時天氣觀測。
+    """向 OpenMeteo 請求一批地點在指定期間的逐小時天氣觀測。
 
-    回傳一律正規化為 list：OpenMeteo 在單一地點時回傳 dict、多地點時回傳 list，
-    那是 API 的特性，不該讓呼叫端知道（`batch_size=1` 時才會踩到的邊界）。
+    請求會固定帶上台北時區與統一高程，讓同一個網格內的座標拿到相同的值。
+    OpenMeteo 在單一地點時回傳字典、多地點時回傳清單，本函式一律正規化成
+    清單，呼叫端不必分辨。
 
-    Parameters:
+    Args:
         lats_str (str): 以逗號分隔的緯度字串。
         lons_str (str): 以逗號分隔的經度字串，順序需與 `lats_str` 對應。
         start_date (str): 起始日期，格式 `YYYY-MM-DD`。
@@ -250,14 +325,30 @@ def _request_weather_api(
         variables (list[str]): 要取得的氣象指標。
 
     Returns:
-        list[dict]: 每個元素是一個地點的回應，順序與請求的經緯度一致。
+        list[dict]: 每個元素是一個地點的回應，順序與請求的經緯度一致，形如：
+
+            [
+                {
+                    "latitude": 25.05,
+                    "longitude": 121.55,
+                    "hourly": {
+                        "time": ["2024-01-01T00:00", "2024-01-01T01:00"],
+                        "temperature_2m": [16.4, 16.1],
+                        "precipitation": [0.0, 0.2],
+                    },
+                },
+            ]
 
     Raises:
-        RuntimeError: 回應不含任何地點資料。請求了地點卻拿回空的，
-            是故障而非「查無資料」，不可吞成正常回傳（ADR-0003）。
-        requests.exceptions.HTTPError: 4xx／5xx；其中 5xx 已重試過，
-            429 刻意不重試（見 `_should_retry`）。
-        requests.exceptions.Timeout | ConnectionError: 重試耗盡後原樣拋出。
+        RuntimeError: 回應不含任何地點資料。請求了地點卻拿回空的是故障，
+            不能當成「查無資料」吞掉。
+        requests.exceptions.HTTPError: 回應非 2xx；5xx 已重試過，429 不重試。
+        requests.exceptions.Timeout: 請求逾時且重試耗盡。
+        requests.exceptions.ConnectionError: 連線失敗且重試耗盡。
+        Exception: 其他非預期錯誤，記下 error 後原樣拋出。
+
+    Notes:
+        不把故障吞成空結果參考 ADR-0003。
     """
     # 高程要逐地點指定，數量必須與經緯度一致（ADR-0012）
     location_count = len(lats_str.split(","))
@@ -316,14 +407,24 @@ def _request_weather_api(
 def e_get_uniq_acc_geo(
     target_year: int, *, database: str | None = None
 ) -> pd.DataFrame:
-    """Extract: 從MySQL server讀取車禍資料主表，並取得進位＋去重後的經緯度組合
+    """查出某年度事故發生地的經緯度，進位到氣象網格後去除重複。
 
-    :param target_year: 要從MySQL資料表查詢哪一年份的車禍資料主表
-    :type target_year: int
-    :param database: 要從MySQL哪一個資料庫查詢target_year車禍資料主表，如不指定，會從預設資料庫查詢
-    :type database: str | None = None
-    :return: 將經緯度都進位至氣象網格，再去掉重複出現的經緯度組合之後的pandas DataFrame
-    :rtype: DataFrame
+    回傳的是「要向 API 請求哪些觀測點」的清單，因此只保留進位後的座標兩欄，
+    約數百列。同樣是讀事故主表，`e_get_all_acc_geo()` 則是一筆事故一列。
+
+    Args:
+        target_year (int): 要查詢的年份（民國年，取自事故編號前四碼）。
+        database (str | None): 資料表所在的資料庫名稱；不指定則用預設資料庫。
+
+    Returns:
+        pandas.DataFrame: 去重後的觀測點清單，形如：
+
+            lat_round  lon_round
+            25.05      121.55
+            24.15      120.65
+
+    Raises:
+        SQLAlchemyError: 查詢失敗。
     """
     # 1. 指派要查詢的資料表名稱
     table_name = "fact_accident_main"
@@ -366,20 +467,30 @@ def e_get_uniq_acc_geo(
 
 
 def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.DataFrame:
-    """Extract: 讀取車禍資料主表，取得每一筆事故的進位座標與整點化時間。
+    """查出某年度每一筆事故的進位座標與整點化的發生時間。
 
-    與 `e_get_uniq_acc_geo()` 的差別在**粒度**：那支去重後只回傳觀測點清單
-    （約數百列），供決定要向 API 請求哪些地點；本函式一筆事故一列
-    （約數十萬列），供 `t_fact_hourly_weather()` 與天氣資料 merge。
+    與 `e_get_uniq_acc_geo()` 的差別在粒度：那支去重後只回傳觀測點清單，供決定
+    要向 API 請求哪些地點；本函式一筆事故一列（約數十萬列），供
+    `t_fact_hourly_weather()` 拿來與天氣資料 merge。事故時間在 SQL 內就四捨五入
+    到整點，才對得上逐小時的天氣觀測；座標與另一支走同一個進位函式，
+    merge 才接得起來。
 
-    兩支都呼叫 `round_to_weather_grid()`，merge 才接得起來。
+    Args:
+        target_year (int): 要查詢的年份（西元年，取自事故日期）。
+        database (str | None): 資料表所在的資料庫名稱；不指定則用預設資料庫。
 
-    :param target_year: 要從MySQL資料表查詢哪一年份的車禍資料主表
-    :type target_year: int
-    :param database: 要從MySQL哪一個資料庫查詢target_year車禍資料主表，如不指定，會從預設資料庫查詢
-    :type database: str | None = None
-    :return: 將經緯度都進位至氣象網格後得到的pandas DataFrame
-    :rtype: DataFrame
+    Returns:
+        pandas.DataFrame: 一筆事故一列，形如：
+
+            accident_id  lat_round  lon_round  approx_accident_datetime
+            1130101001   25.05      121.55     2024-01-01T08:00:00
+            1130101002   24.15      120.65     2024-01-01T10:00:00
+
+    Raises:
+        SQLAlchemyError: 查詢失敗。
+
+    Notes:
+        兩側座標必須走同一支進位函式，參考 ADR-0012。
     """
     # 1. 指派要查詢的資料表名稱
     table_name = "fact_accident_main"
@@ -441,21 +552,35 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
 def prep_batch_plan(
     df_acc_unique_loc: pd.DataFrame, target_year: int, batch_size=50
 ) -> list[dict]:
-    """盤點還缺哪些（觀測點, 月），切成批次後把各批的經緯度清單存到 GCS 的 tmp 路徑。
+    """盤點還缺哪些「觀測點 × 月」，切成批次並把各批的清單存到 GCS 暫存路徑。
 
-    逐月比對「該有哪些觀測點檔案」與「GCS 上實際有哪些」，缺的才排進計畫。
-    已抓完整的月（見 `is_month_complete()`）排除既有檔案；尚未抓完整的月則
-    整月重抓覆蓋 —— OpenMeteo 沒有 append，要多幾天就得重寫整個月的檔案。
+    逐月比對「該有哪些觀測點檔案」與「GCS 上實際有哪些」，缺的才排進計畫：
+    已抓完整的月排除既有檔案，尚未抓完整的月則整月重抓覆蓋（OpenMeteo 不支援
+    附加，要多幾天就得重寫整個月的檔案）。每一批的經緯度清單寫成一個暫存
+    Parquet，回傳的只是批次參數，供 Airflow 的 `expand_kwargs()` 展開。
 
-    回傳空 list 是**正常結果**，代表該年度已全部抓完，不是故障。
+    回傳空 list 是正常結果，代表該年度已全部抓完，不是故障。
 
-    :param df_acc_unique_loc: 經過進位與去重而得到的事故地經緯度
-    :type df_acc_unique_loc: pd.DataFrame
-    :param target_year: 要從GCS查詢哪一年份的天氣觀測資料
-    :type target_year: int
-    :param batch_size: 幾個觀測點為一批次，預設值為50
-    :return: 每個元素是一批的參數，供 Airflow 的 `expand_kwargs()` 展開
-    :rtype: list[dict]
+    Args:
+        df_acc_unique_loc (pandas.DataFrame): 進位並去重後的觀測點清單，
+            需含 `lat_round`、`lon_round` 兩欄。
+        target_year (int): 要盤點的年份。
+        batch_size (int): 幾個觀測點切成一批，預設 50。
+
+    Returns:
+        list[dict]: 每個元素是一批的參數，形如：
+
+            [
+                {"batch_id": 0, "target_year": 2024, "month": 1},
+                {"batch_id": 1, "target_year": 2024, "month": 1},
+            ]
+
+    Raises:
+        GoogleAPIError: 盤點或寫入暫存檔失敗。
+        KeyError: 傳入的 DataFrame 缺少 `lat_round` 或 `lon_round` 欄位。
+
+    Notes:
+        參考 ADR-0013。
     """
     today = datetime.now(TAIPEI).date()
 
@@ -519,20 +644,29 @@ def prep_batch_plan(
 
 
 def e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
-    """Extract: 讀取（月, 批號）對應的經緯度清單，向 OpenMeteo 請求該月天氣並落地 GCS。
+    """讀取一批觀測點清單，向 OpenMeteo 請求該月天氣並逐點存成 GCS Parquet。
 
-    請求的單位是「一批觀測點 × 一個月」，額度因此是事先算得出來的常數
-    （`批次大小 × 該月天數 / 25`），而不是隨「這批缺幾個月」浮動（ADR-0013 決策四）。
+    請求的單位是「一批觀測點 × 一個月」，因此耗用的額度是事先算得出來的常數，
+    不會隨這批缺幾個月而浮動。回應會先斷言筆數與請求的地點數相同，因為天氣是
+    按位置掛回座標的，筆數對不上就會把天氣掛到錯誤的地點且不會報錯。每個地點
+    存成一個檔案，單一檔案失敗只記 warning，最後統一結算失敗率。函式結束前會
+    隨機睡 5 到 10 秒，緩解來源伺服器負擔。
 
-    :param batch_id: 批號
-    :type batch_id: int
-    :param target_year: 說明向OpenMeteo historical weather API請求哪一年度的天氣觀測資料
-    :type target_year: int
-    :param month: 要請求哪一個月，1～12
-    :type month: int
-    :return: GCS bucket 名稱字串
-    :rtype: str
-    :raises RuntimeError: 回傳筆數與請求地點數不符，或寫入失敗率過高
+    Args:
+        batch_id (int): 批號，與 `target_year`、`month` 一起決定要讀哪份暫存清單。
+        target_year (int): 年份。
+        month (int): 月份，1～12。
+
+    Returns:
+        str: 天氣資料所在的 GCS bucket 名稱，供下游 task 接手。
+
+    Raises:
+        RuntimeError: 回傳筆數與請求的地點數不符，或寫入失敗率超過 20%。
+        GoogleAPIError: 讀取暫存清單失敗。
+        requests.exceptions.RequestException: 請求失敗且重試耗盡（含 429）。
+
+    Notes:
+        批次單位的取捨參考 ADR-0013。
     """
     logger.info(f"Processing {target_year}-{month:02d} batch no {batch_id}......")
     # 1. 從GCS上打開df_one_batch

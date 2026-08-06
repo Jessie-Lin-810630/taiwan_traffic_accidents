@@ -10,14 +10,19 @@ from src.util.mysql_utils import upsert_to_table
 def l_fact_night_markets(
     df_fact_night_markets: pd.DataFrame, database: str | None = None
 ) -> None:
-    """以 UPSERT 將夜市事實資料寫入 `fact_night_markets`。
+    """把夜市事實資料寫入 `fact_night_markets`，唯一鍵重複時改為更新。
 
-    寫入前會蓋上 `updated_on` 時間戳。此為本表獨有的處理，
-    因此留在本 loader 內，不進共用的 `upsert_to_table()`。
+    唯一鍵是「緯度 + 經度 + 營業星期」的組合，衝突時更新更新時間與當日的營業
+    起訖時間。寫入前會蓋上 `updated_on` 時間戳，這是本表獨有的處理，因此留在
+    這支 loader 內而不進共用的寫入函式。
 
-    Parameters:
-        df_fact_night_markets (pandas.DataFrame): 待寫入的夜市事實資料。
+    Args:
+        df_fact_night_markets (pandas.DataFrame): 待寫入的資料，欄位名須與資料表一致，
+            即 `t_clean_one_night_market()` 展開後的結果。
         database (str | None): 目標資料庫名稱。
+
+    Raises:
+        pymysql.MySQLError: 寫入失敗，事務復原後原樣往外拋。
     """
     df_fact_night_markets["updated_on"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

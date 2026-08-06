@@ -1,4 +1,8 @@
-"""Streamlit 分頁：全台夜市事故嚴重度分析。"""
+"""Streamlit 分頁：全臺夜市事故嚴重度分析。
+
+讀取 DAG 預先算好的全臺總表（Redis 鍵 `market:national_master_df`），依地區、
+縣市與時間篩選後繪出各項圖表。本頁不做重運算，也不直接查 MySQL。
+"""
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,7 +22,20 @@ st.set_page_config(layout="wide", page_title="全台夜市事故嚴重分析", p
 def get_region_or_cities(
     *, city: str | None = None, region: str | None = None
 ) -> str | list | None:
-    """由縣市反查所屬地區，或由地區取得其縣市清單（兩者只能擇一傳入）。"""
+    """由縣市反查所屬地區，或由地區取得其縣市清單，兩者只能擇一傳入。
+
+    地區分成北部、中部、南部、東部與東部離島、其他離島五類。
+
+    Args:
+        city (str | None): 縣市名稱，例如 `"臺北市"`。
+        region (str | None): 地區名稱，例如 `"北部"`。
+
+    Returns:
+        str | list | None: 傳入縣市時回傳所屬地區名稱，查不到時回傳
+            `"找不到地區"`；傳入地區時回傳縣市清單，形如
+            `["臺北市", "新北市", "基隆市", "桃園市", "新竹市", "新竹縣"]`，
+            查不到時回傳空字串；兩者都傳入時回傳提示字串；都不傳則為 `None`。
+    """
     cities_per_region = {
         "北部": ["臺北市", "新北市", "基隆市", "桃園市", "新竹市", "新竹縣"],
         "中部": ["臺中市", "彰化縣", "南投縣", "雲林縣", "苗栗縣"],
@@ -46,7 +63,24 @@ def get_region_or_cities(
 # 這樣使用者在切換篩選條件時，就不必重新去 Redis 撈取幾十 MB 的大表
 @st.cache_data(ttl=36000, show_spinner=False)
 def get_dynamic_national_data() -> pd.DataFrame:
-    """讀取預計算的全台總表，並剔除跨夜市重疊的重複事故。"""
+    """讀取預計算的全臺總表，並剔除跨夜市重疊的重複事故。
+
+    臺北市等密集區域會有多個夜市的範圍相互重疊，同一件事故因此被算進多個夜市，
+    這裡依 `accident_id` 去重以確保全臺總數正確。結果另以 Streamlit 的快取存在
+    伺服器記憶體 10 小時，使用者切換篩選條件時就不必重新從 Redis 取回大表。
+
+    Returns:
+        pandas.DataFrame: 去重後的全臺總表，形如：
+
+            accident_id      accident_date  nightmarket_name  nightmarket_city  death_count  injury_count  pdi_score
+            2024010100000001  2024-01-01     士林夜市          臺北市            0            1             3.0
+            2024010100000002  2024-01-01     逢甲夜市          臺中市            1            0             15.0
+
+            快取不存在、為空或缺少 `accident_id` 欄位時回傳空 DataFrame。
+
+    Raises:
+        RedisError: 讀取快取失敗。
+    """
     cache_key = "market:national_master_df"  # 理應在dags/d_redis_precompute.py存入Redis
     unpickled_data = get_cache(cache_key)
     # unpickled_data = pd.DataFrame(unpickled_data)
@@ -61,7 +95,18 @@ def get_dynamic_national_data() -> pd.DataFrame:
 
 
 def main() -> None:
-    """組出分頁版面，載入全台總表並依使用者篩選繪圖。"""
+    """組出分頁版面，載入全臺總表並依使用者的篩選繪圖。
+
+    流程是：取得夜市主檔並畫出側邊欄 → 讀取預計算的全臺總表 → 剔除縣市欄為空的
+    列 → 左側提供分析視角（綜合危險指數或事故件數）與地區、縣市篩選器，右側
+    顯示核心指標與各項圖表。
+
+    兩種失敗各自處理：資料服務層或快取服務故障時記錄並中止渲染；快取只是還沒被
+    預計算填上（總表為空）則顯示提示，請使用者確認排程是否跑完。
+
+    Notes:
+        「快取故障」與「快取裡沒有這筆資料」的語意分離，參考 ADR-0003。
+    """
     # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     try:
         df_market = ds.get_all_nightmarkets()
@@ -95,7 +140,7 @@ def main() -> None:
         try:
             df_raw = get_dynamic_national_data()
         except RedisError:
-            # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+            # 快取「故障」與「快取裡沒有這筆資料」自 ADR-0003 起語意分離：
             # 前者拋 RedisError，後者才會回傳空表。
             logger.error("全台總表快取讀取失敗", exc_info=True)
             st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")

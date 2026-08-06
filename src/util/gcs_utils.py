@@ -1,41 +1,35 @@
-"""GCS 共用工具：Client 單例與 Parquet 物件的讀取、寫入與列舉。
+"""GCS 的唯一存取面：Client 單例與 Parquet 物件的讀取、寫入與列舉。
 
-暫時性故障的重試由 `google-cloud-storage` 自己完成，本模組**不再疊第二層**
-（ADR-0006 提醒過疊層會讓重試上限變成 3×3）。以下是這件事的精確範圍 ——
-寫在這裡是因為「以為有重試、其實沒有」與其反面同樣危險。
+三支公開函式只處理 Parquet，因為專案存進 GCS 的一律是 Parquet
+（dag d07/d08 天氣 ETL 的中繼檔）。
+bucket 名稱一律由呼叫端傳入，本模組的函式不預設任何 bucket。GCS 認證走
+Application Default Credentials，因此不讀任何 GCP 相關的環境變數。
 
-**由什麼工具重試**：`google.cloud.storage.retry.DEFAULT_RETRY`，
-底層是 `google.api_core.retry.Retry`，判斷式為該模組的 `_should_retry()`。
+暫時性故障的重試交予 `google-cloud-storage` 內建的 `DEFAULT_RETRY` 負責，
+本模組不另外使用 tenacitiy 等重試工具多疊一層，否則會讓重試上限變成兩者相乘。
 
-**在什麼情境下重試**（`_RETRYABLE_TYPES` 與 `_RETRYABLE_STATUS_CODES`）：
+重試行為範圍是：
 
-- HTTP 狀態碼 **408、429、500、502、503、504** ——
-  注意是這六個，不是「所有 5xx」；**501 不重試**
-- 傳輸層：`ConnectionError`、`requests.ConnectionError`、
-  `ChunkedEncodingError`、`requests.Timeout`
-- 協定層：`http.client` 的 `BadStatusLine` / `IncompleteRead` / `ResponseNotReady`、
-  `urllib3` 的 `PoolError` / `ProtocolError` / `SSLError` / `TimeoutError`
+- 會重試的情況：HTTP 408、429、500、502、503、504（注意不是所有 5xx，
+  501 不重試）、傳輸層的連線與逾時錯誤、`http.client` 與 `urllib3` 的協定層錯誤。
+- 退避參數：首次等 1 秒、每次乘以 2、單次上限 60 秒、總時限 120 秒。
+- 本模組用到的三個 API（`Blob.download_as_bytes`、`Blob.upload_from_file`、
+  `Client.list_blobs`）預設都是無條件重試。
 
-**退避參數**：首次等 1 秒、每次 ×2、單次上限 60 秒、總時限 120 秒。
+日後擴充要留意：函式庫對「重試可能造成副作用」的操作（例如 `Blob.delete()`、
+metadata 異動）預設改用 `DEFAULT_RETRY_IF_GENERATION_SPECIFIED` —— 只有請求帶了
+`if_generation_match` 或 `generation` 時才重試，否則一次都不重試。新增這類函式
+必須自行決定是否傳入 precondition，不能沿用「函式庫會重試」的假設。
 
-**本模組三支函式所用的 API 皆為無條件 `DEFAULT_RETRY`**
-（`Blob.download_as_bytes`、`Blob.upload_from_file`、`Client.list_blobs`，
-已以 `inspect.signature` 核對 3.13.0 的實際預設值）。
+傳到呼叫端的 `GoogleAPIError` 都是重試耗盡後仍然失敗的，一律原樣拋出、不轉型別。
 
-**陷阱 —— 日後擴充本模組時務必留意**：函式庫另有 `ConditionalRetryPolicy`。
-對「重試可能造成資料重複或其他副作用」的操作（例如 `Blob.delete()`、
-metadata 異動），預設是 `DEFAULT_RETRY_IF_GENERATION_SPECIFIED` ——
-**只有在請求帶了 `if_generation_match` / `generation` 時才會重試，否則一次都不重試**。
-若要在此新增這類函式，必須自行決定是否傳入 precondition，
-不能沿用「反正函式庫會重試」的假設。
+Notes:
+    重試不疊層參考 ADR-0006，例外不轉型別參考 ADR-0001。
 
-能傳到呼叫端的 `GoogleAPIError`，都是上述重試耗盡後仍然失敗的，
-因此一律原樣拋出、不再轉型別（ADR-0001）。
-
-參考：
-- https://cloud.google.com/storage/docs/retry-strategy#client-libraries
-- https://cloud.google.com/python/docs/reference/storage/latest/retry_timeout
-- https://cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.retry
+References:
+    - https://cloud.google.com/storage/docs/retry-strategy#client-libraries
+    - https://cloud.google.com/python/docs/reference/storage/latest/retry_timeout
+    - https://cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.retry
 """
 
 import io
@@ -48,18 +42,18 @@ from src.util.logger_crtx import get_logger
 
 logger = get_logger(__name__)
 
-# 模組層 Client 單例（與 mysql_utils._ENGINES、redis_utils._REDIS_POOL 同形）：
-# Client 內含一個 HTTP session 與認證憑證，憑證取得需往 metadata server 走一趟。
-# 每次呼叫都新建會讓那趟往返在每個 batch 重複發生。
+# 模組層 Client 單例：
 _CLIENT: storage.Client | None = None
 
 
 def _get_client() -> storage.Client:
     """取得行程內共用的 GCS Client。
 
-    以 Application Default Credentials 建立：VM 上取用附加的 service account
-    （經 GCE metadata server），地端則取用 `gcloud auth application-default login`
-    留下的憑證。因此本模組不讀任何 GCP 相關的環境變數。
+    以 Application Default Credentials 建立，憑證取自：
+
+    - 如在 VM 上：取用附加的 service account （經 GCE metadata server）。
+    - 地端：取用 `gcloud auth application-default login`
+    本函式預設不額外讀取任何 GCP 相關的環境變數。
 
     Returns:
         storage.Client: 行程內共用的 Client 實例。
@@ -72,24 +66,24 @@ def _get_client() -> storage.Client:
 
 
 def read_parquet(bucket: str, object_name: str) -> pd.DataFrame:
-    """從 GCS 讀取單一 Parquet 物件並解析為 DataFrame。
+    """從 GCS 下載單一 Parquet 物件並解析成 DataFrame。
 
-    下載與解析綁在一起是刻意的：本專案存進 GCS 的一律是 Parquet，
-    把 `BytesIO` 樣板留在呼叫端只會讓同一段程式碼複製多份
-    （`redis_utils` 擁有 pickle 是同一個形狀）。
+    下載與解析綁在一起，呼叫端不必自行處理 `BytesIO`。
 
-    Parameters:
-        bucket (str): bucket 名稱。由呼叫端傳入，本模組不知道任何特定 bucket。
-        object_name (str): bucket 內的完整物件路徑。
+    Args:
+        bucket (str): bucket 名稱。
+        object_name (str): bucket 內的 Parquet 物件之完整路徑。
 
     Returns:
-        pandas.DataFrame: 解析後的資料。
+        pandas.DataFrame: 解析後的資料，欄位與當初寫入時相同。
+            以本專案天氣中繼檔為例，回傳的 DataFrame 形如：
+
+                latitude  longitude  time                 temperature_2m  precipitation
+                25.05     121.55     2024-01-01 00:00:00  16.4            0.0
+                25.05     121.55     2024-01-01 01:00:00  16.1            0.2
 
     Raises:
-        GoogleAPIError: 下載失敗。`Blob.download_as_bytes()` 預設帶
-            `DEFAULT_RETRY`，408/429/500/502/503/504 與傳輸層故障
-            已在其內部退避重試過（詳見模組 docstring）；
-            能傳到這裡的都是重試耗盡後仍然失敗的，原樣拋出。
+        GoogleAPIError: 下載失敗且內建重試已耗盡（物件不存在也屬此類），原樣拋出。
     """
     try:
         blob = _get_client().bucket(bucket).blob(object_name)
@@ -104,27 +98,20 @@ def read_parquet(bucket: str, object_name: str) -> pd.DataFrame:
 def write_parquet(
     bucket: str, object_name: str, df: pd.DataFrame, *, index: bool = False
 ) -> None:
-    """將 DataFrame 序列化為 Parquet 並上傳至 GCS（同名物件會被覆蓋）。
+    """把 DataFrame 序列化成 Parquet 並上傳到 GCS，同名物件會被覆蓋。
 
-    透過 `io.BytesIO` 在記憶體中完成序列化，不落地暫存檔，
-    也避開 pandas 內部直接讀寫 GCS 時的套件版本相依。
+    序列化在記憶體中以 `io.BytesIO` 完成，不落地暫存檔。函式不帶
+    `if_generation_match`，因此同名物件一律直接覆蓋，此行為屬本專案刻意。
 
-    Parameters:
+    Args:
         bucket (str): bucket 名稱。
-        object_name (str): bucket 內的完整物件路徑。
+        object_name (str): bucket 內的 Parquet 物件之完整路徑。
         df (pandas.DataFrame): 待寫入的資料。
-        index (bool): 是否將 DataFrame 的 index 一併寫入，預設 `False`。
-            需要保留 index 的呼叫端請顯式傳入 `True` —— 兩種需求都存在，
-            預設值不該讓差異隱形。
+        index (bool): 是否把 DataFrame 的 index 一併寫入，預設 `False`；
+            需要保留 index 的呼叫端請顯式傳入 `True`。
 
     Raises:
-        GoogleAPIError: 上傳失敗。`Blob.upload_from_file()` 在 3.13.0 的預設是
-            **無條件** `DEFAULT_RETRY`（非 `DEFAULT_RETRY_IF_GENERATION_SPECIFIED`），
-            因此暫時性故障已在其內部退避重試過（詳見模組 docstring）；
-            能傳到這裡的都是重試耗盡後仍然失敗的，原樣拋出。
-
-            本函式不傳 `if_generation_match`，因此同名物件一律被覆蓋 ——
-            天氣 pipeline 需要的正是「重跑就覆蓋」。
+        GoogleAPIError: 上傳失敗且內建重試已耗盡，原樣拋出。
     """
     buffer = io.BytesIO()
     df.to_parquet(buffer, index=index, engine="pyarrow")
@@ -139,22 +126,28 @@ def write_parquet(
 
 
 def list_parquet(bucket: str, prefix: str) -> list[str]:
-    """列出指定前綴下的所有 Parquet 物件路徑。
+    """列出指定前綴底下所有 Parquet 物件的完整路徑。
 
-    回傳空 list 代表該前綴下確實沒有 Parquet 物件 —— 那是一個真實的答案，
-    不是故障。「沒有檔案算不算故障」是呼叫端的政策（ADR-0003）。
+    回傳空 list 代表該前綴下確實沒有 Parquet 物件，那是一個真實的答案而非故障；
+    「沒有檔案算不算故障」由呼叫端自行決定。
 
-    Parameters:
+    Args:
         bucket (str): bucket 名稱。
         prefix (str): 物件路徑前綴。
 
     Returns:
-        list[str]: 以 `.parquet` 結尾的物件完整路徑，不含其餘物件。
+        list[str]: 以 `.parquet` 結尾的物件完整路徑，其餘物件不列入，形如：
+
+            [
+                "weather_cache_final/2024/data/2024-01/25.05_121.55.parquet",
+                "weather_cache_final/2024/data/2024-01/24.15_120.65.parquet",
+            ]
 
     Raises:
-        GoogleAPIError: 列舉失敗。`Client.list_blobs()` 預設帶 `DEFAULT_RETRY`，
-            暫時性故障已在其內部退避重試過（詳見模組 docstring）；
-            能傳到這裡的都是重試耗盡後仍然失敗的，原樣拋出。
+        GoogleAPIError: 列舉失敗且內建重試已耗盡，原樣拋出。
+
+    Notes:
+        空結果不視為故障，參考 ADR-0003。
     """
     try:
         blobs = _get_client().list_blobs(bucket, prefix=prefix)

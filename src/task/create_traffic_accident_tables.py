@@ -1,11 +1,21 @@
-"""建立交通事故星狀綱要（事實表與維度表）的 DDL 宣告。"""
+"""交通事故星狀綱要的 DDL 宣告與建表函式。
+
+`TRAFFIC_ACCIDENT_TABLES` 以「資料表名稱對應 CREATE TABLE 敘述」的形式集中
+4 張維度表（`dim_accident_day`、`dim_road_design`、`dim_lane_design`、
+`dim_accident_type`）與 3 張事實表（`fact_accident_main`、`fact_accident_env`、
+`fact_accident_human`）的定義。字典的鍵必須與 DDL 實際建立的資料表同名，
+`create_tables()` 的存在性檢查才會正確。
+
+維度表一律以業務欄位的組合作為唯一鍵、另設自增的代理鍵供 JOIN 使用；
+建表順序即字典的順序，被外鍵參考的表都排在參考它的表之前。
+"""
 
 from sqlalchemy import Engine
 
 from src.util.mysql_utils import create_tables
 
-# 表名 -> CREATE TABLE 敘述。鍵必須與 DDL 實際建立的表同名，
-# create_tables() 的存在性檢查才會正確。
+# key 必須與 DDL 實際建立的表同名，因為 create_tables() 會以它在內部做 IF EXISTS 檢查。
+# 不可隨便調換字典序，因為後續建表順序按照字典序，而被外鍵參考的表都排在參考它的表之前。
 TRAFFIC_ACCIDENT_TABLES = {
     # 預計5年只會有幾千筆日期，因此以 accident_date 作為唯一鍵確保業務邏輯不重複，day_id 則作為 surrogate key 方便 JOIN
     "dim_accident_day": """CREATE TABLE IF NOT EXISTS `dim_accident_day` (
@@ -129,9 +139,12 @@ TRAFFIC_ACCIDENT_TABLES = {
 
 
 def create_traffic_accident_tables(engine: Engine) -> None:
-    """建立交通事故星狀綱要的 4 張維度表與 3 張事實表（已存在則略過）。
+    """建立交通事故星狀綱要的 4 張維度表與 3 張事實表，已存在的表會略過。
 
-    Parameters:
+    Args:
         engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+
+    Raises:
+        SQLAlchemyError: 任一張表的 DDL 執行失敗，事務復原後往外拋。
     """
     create_tables(engine, TRAFFIC_ACCIDENT_TABLES)

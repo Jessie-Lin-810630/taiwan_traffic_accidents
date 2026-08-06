@@ -1,4 +1,9 @@
-"""Transform 階段：產生事故日維度 DataFrame，含星期與全國性活動標記。"""
+"""Transform 階段：產生事故日維度 DataFrame，含星期與全國性活動標記。
+
+與其他 `t_*` 不同，本模組不讀事故 CSV，而是由日期區間直接生成日曆。
+`taiwan_national_activities` 是 2021 至 2026 年國定假日與全國性活動的對照表，
+以 `YYYY-MM-DD` 為鍵；跨到新年度時要在此補上該年度的假日。
+"""
 
 import calendar
 
@@ -113,17 +118,29 @@ def t_data_for_dim_accident_day(
     taiwan_national_activities: dict,
     weekday_language: str = "zh_tw",
 ) -> pd.DataFrame:
-    """準備要存入維度表dim_accident_day的資料。
+    """依日期區間生成事故日維度資料，一天一列。
 
-    Parameters:
-        start_date: 起始日期，格式為 YYYY-MM-DD。
-        end_date: 結束日期，格式為 YYYY-MM-DD。
-        taiwan_national_activities: 台灣國定假日或全國性活動對照表，
-            key 為 YYYY-MM-DD，value 為活動名稱。
-        weekday_language: 星期欄位語系，支援 zh_tw、en。
+    每一天標上星期名稱與當天的全國性活動（查不到就是「無特殊活動」），並依
+    「週六、週日或當天有全國性活動」判定為假日。`weekday_language` 傳入不支援
+    的語系時退回 `zh_tw`。
+
+    Args:
+        start_date (str): 起始日期，格式 `YYYY-MM-DD`。
+        end_date (str): 結束日期，格式 `YYYY-MM-DD`，含當天。
+        taiwan_national_activities (dict): 國定假日與全國性活動對照表，
+            鍵為 `YYYY-MM-DD`，值為活動名稱。
+        weekday_language (str): 星期欄位語系，支援 `zh_tw` 與 `en`，預設 `zh_tw`。
 
     Returns:
-        pd.DataFrame: 包含accident_date、accident_weekday、is_holiday、national_activity 四個欄位。
+        pandas.DataFrame: 一天一列，形如：
+
+            accident_date  accident_weekday  national_activity      is_holiday
+            2024-01-01     星期一            中華民國開國紀念日      1
+            2024-01-02     星期二            無特殊活動              0
+            2024-01-06     星期六            無特殊活動              1
+
+    Raises:
+        ValueError: 日期字串格式無法解析。
     """
     # 生成日期範圍
     date_index = pd.date_range(

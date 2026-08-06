@@ -12,7 +12,35 @@ logger = get_logger(__name__)
 
 
 def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
-    """S"""
+    """從事故 CSV 清洗出事故主檔事實資料，一件事故一列。
+
+    逐檔讀入後做四件清洗：日期轉成 `YYYY-MM-DD`、時間補零並轉成 `HH:MM:SS`、
+    把「死亡X;受傷Y」拆成兩個整數欄、經緯度轉成浮點數。合併所有檔案後，回頭
+    查 `dim_accident_day` 與 `dim_accident_type` 兩張維度表取得外鍵，因此執行前
+    這兩張維度表必須已經載入。
+
+    主鍵 `accident_id` 由「日期八碼 + 當日八位流水號」組成，流水號依排序後的
+    順序編出，因此同一份輸入重跑會得到相同的編號。去重與排序的依據都是
+    日期、時間、經緯度四欄的組合，與資料表的唯一鍵一致。
+
+    Args:
+        csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
+
+    Returns:
+        pandas.DataFrame: 事故主檔資料，空值已轉成 `None` 以便寫入 MySQL，形如：
+
+            accident_id      accident_type_id  day_id  accident_time  death_count  injury_count  longitude   latitude
+            2024010100000001  12                1       08:15:00       0            1             121.552300  25.088100
+            2024010100000002  47                1       09:40:00       1            0             120.658700  24.152600
+
+    Raises:
+        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
+        FileNotFoundError: 清單中的某個路徑不存在。
+        SQLAlchemyError: 查詢維度表失敗。
+
+    Notes:
+        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010。
+    """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
 

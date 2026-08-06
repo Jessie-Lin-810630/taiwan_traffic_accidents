@@ -1,21 +1,16 @@
 """共用 UI 元件：側邊欄、效能計時、Folium 地圖、翻譯掛件與共用 CSS。
 
-This python file aims to collect reusable Streamlit/Folium/CSS
-functions so other pages can call them.
+各分頁重複用得到的 Streamlit、Folium 與 CSS 片段都集中在這裡：
 
-1. render_sidebar() builds the left sidebar [所有分頁的左側導航欄]
-2. page_timer() measures execution time [效能計時功能]
-3. build_map() creates the Folium map [最重要的一支函式，依據傳入的參數決定要畫「全台總覽熱力圖」還是「單一夜市細節圖」]
-4. render_google_translator() injects Google Translate [嵌入Google translate]
-5. load_custom_css() adds shared CSS styles [載入客製化的CSS語法]
+1. `render_sidebar()` —— 所有分頁共用的左側導航欄
+2. `page_timer()` —— 量測一段程式碼的執行時間
+3. `build_map()` —— 依參數畫出全臺總覽熱力圖或單一夜市細節圖
+4. `render_google_translator()` —— 嵌入 Google 翻譯掛件
+5. `load_custom_css()` —— 載入各頁共用的樣式
 
-The normal flow is:
-    A page loads data.
-    The page calls ui.render_sidebar(df_market).
-    The page may call ui.load_custom_css().
-    For map pages, the page prepares filtered data.
-    The page calls ui.build_map(...).
-    The page displays that Folium map with st_folium(...).
+一個分頁的典型流程是：載入資料 → 呼叫 `render_sidebar()` 與
+`load_custom_css()` → 準備好篩選後的資料 → 呼叫 `build_map()` →
+以 `st_folium()` 顯示回傳的地圖物件。
 """
 
 import time
@@ -34,7 +29,24 @@ from folium.plugins import (  # two plugins used for heatmaps and clustered mark
 
 # 1. 側邊欄 (Sidebar)
 def render_sidebar(df_market):
-    """畫出所有分頁共用的左側導航欄，回傳預設的地圖圖層開關。"""
+    """畫出所有分頁共用的左側導航欄，回傳預設的地圖圖層開關。
+
+    導航欄包含語言切換掛件與各分頁的連結。回傳值的三個元素中，實際被呼叫端
+    使用的只有第三個 `layers`。
+
+    Args:
+        df_market (pandas.DataFrame): 夜市資料；目前僅為維持各頁呼叫方式一致而保留。
+
+    Returns:
+        tuple[bool, None, dict]: 第三個元素是圖層開關，形如：
+
+            {
+                "traffic_heat": True,
+                "night_market": True,
+                "weather": False,
+                "accidents": True,
+            }
+    """
     # 呼叫語言切換選單
     st.sidebar.markdown("### 🌐 語言切換 / Language")  # 跟使用write會有差嗎?
     render_google_translator()
@@ -70,9 +82,16 @@ def render_sidebar(df_market):
 # 效果是，可使用with 效能計時函式(): 下面包住一段程式碼，便可計算該區塊的執行時間，進而用於評估效能調校前後差。
 @contextmanager
 def page_timer():
-    """用於計算渲染時間，但不需要在st.sidebar中顯示內容
+    """量測 `with` 區塊內程式碼的執行時間的上下文管理器。
 
-    例如：/src/task/pages/v_act1_single_accident.py
+    用來評估效能調校前後的差異，目前只計算不顯示，需要看數字時在此加上輸出。
+
+    Yields:
+        None: 進入區塊時開始計時，離開時結束計時。
+
+    Examples:
+        >>> with page_timer():
+        ...     df = load_data()
     """
     start_time = time.time()  # Records the current time before the wrapped code runs
     yield  # Pauses here and lets the code inside with ui.page_timer(): execute.
@@ -94,32 +113,38 @@ def build_map(
     df_market: pd.DataFrame,
     custom_tiles="CartoDB positron",
 ) -> folium.Map:
-    """依據傳入的參數決定要畫「全台總覽熱力圖」還是「單一夜市細節圖」。
+    """畫出全臺總覽熱力圖或單一夜市細節圖，回傳 Folium 地圖物件。
 
-    回傳Map Object，而後可由函式st_folium()顯示繪製好的地圖(詳見src/pages/)。
+    視角依情境決定：總覽模式定在臺灣中部、縮放 8；指定夜市時綁定該夜市座標；
+    兩者皆無則落在臺北、縮放 12。地圖最多疊三組圖層，各自受 `layers` 開關控制：
 
-    :param is_overview:
-    :type is_overview:
-    :param target_market:
-    :type target_market: dict
+    - 全臺事故熱力圖。
+    - 夜市點位：指定夜市時畫星標與分析範圍圓圈，否則畫出所有夜市的小圓點。
+    - 在地事故點位（僅非總覽模式）：拆成一般事故與死亡事故兩群，死亡事故以
+      紅色光暈標記強制疊在最上層。一般事故超過 800 筆時自動改用熱力圖呈現，
+      以免瀏覽器卡死，未超過則以叢集點位顯示。
 
-    :param layers: 圖層開關管理，函式render_sidebar(df_market)的回傳值
-    :type layers: dict[bool]
-    :param dynamic_zoom:
-    :type dynamic_zoom:
+    回傳的物件交由呼叫端以 `st_folium()` 顯示。
 
-    :param radius_m: folium.Circle() 邊界半徑(unit: meter)
-    :type radius_m: int
-    :param traffic_global:
-    :type traffic_global:
+    Args:
+        is_overview (bool): 是否為全臺總覽模式。
+        target_market (dict): 指定的夜市，須含 `lat`、`lon` 與 `MarketName`；
+            總覽模式可傳 `None`。
+        layers (dict): 圖層開關，即 `render_sidebar()` 回傳的第三個元素。
+        dynamic_zoom (int | None): 單一夜市模式的縮放層級，`None` 時為 16。
+        radius_m (int): 分析範圍圓圈的半徑，單位公尺。
+        traffic_global (pandas.DataFrame): 全臺熱力圖資料，空值則不畫該圖層。
+        df_local (pandas.DataFrame): 在地事故資料，至少須含 `latitude`、
+            `longitude` 與 `death_count`。
+        df_market (pandas.DataFrame): 夜市資料，至少須含 `lat`、`lon` 與
+            `MarketName`，通常來自 `get_nightmarkets_for_page_selector()`。
+        custom_tiles (str): 地圖底圖樣式，預設 `"CartoDB positron"`。
 
-    :param df_local: 車禍資料表(至少要包含經度、緯度)
-    :type df_local: pd.DataFrame
-    :param df_market: 夜市資料表(至少要包含經度、緯度)，理想上來自於c_data_service.get_all_nightmarkets()的回傳值
-    :type df_market: pd.DataFrame
+    Returns:
+        folium.Map: 已疊好圖層的地圖物件。
 
-    :param custom_tiles: 地圖背景樣式，預設指定CartoDB Positron
-    :type custom_tiles: str
+    Raises:
+        KeyError: `target_market` 或 `df_market` 缺少座標與名稱欄位。
     """
     # 依據傳入的參數決定要畫「全台總覽熱力圖」還是「單一夜市細節圖」
     # 視角初始化
@@ -285,7 +310,12 @@ def build_map(
 
 # 透過插入Google Translate的 JS 腳本，達成多國語言翻譯
 def render_google_translator():
-    """在側邊欄插入 Google Translate 的語言切換掛件。"""
+    """在側邊欄插入 Google 翻譯的語言切換掛件。
+
+    掛件實際上要注入到最頂層視窗才有作用，因此以 JavaScript 跨過 Streamlit 的
+    iframe 限制建立元件，再定期檢查 DOM 把它搬回側邊欄中的指定位置（最多嘗試
+    50 次）。提供繁體中文、英文、日文與韓文四種語言。
+    """
     container_id = f"google_translate_{uuid.uuid4().hex}"
     st.sidebar.markdown(f'<div id="{container_id}"></div>', unsafe_allow_html=True)
     st.sidebar.markdown("---")
@@ -335,7 +365,12 @@ def render_google_translator():
 
 # CSS：統整所有頁面的卡片、標題、KPI 樣式
 def load_custom_css():
-    """載入各頁面共用的卡片、標題與 KPI 樣式。"""
+    """載入各頁面共用的卡片、標題與 KPI 樣式。
+
+    以 `st.markdown()` 注入一段 CSS，內容涵蓋 PDI 危險指數卡片（含滑鼠停留時的
+    懸浮效果）、標題強調色，以及縣市比較頁面用的 KPI 數據方塊。數據方塊的漲跌
+    以綠升紅降表示。
+    """
     st.markdown(
         """
     <style>

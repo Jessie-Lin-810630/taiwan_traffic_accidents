@@ -1,4 +1,9 @@
-"""DAG d04：依序執行 mart 層 SQL，重建行人事故分析用的資料表。"""
+"""DAG d04：依序執行 mart 層 SQL，重建行人事故分析用的資料表。
+
+每月 15 日 13 點跑一次。mart 層資料表是前端各頁面的資料來源，因此本 DAG 要排在
+事故資料載入完成之後。SQL 腳本放在 `src/task/mart_table_sql/`，一個檔案含多條
+敘述、整份一次執行，任一檔失敗則整批復原。
+"""
 
 import os
 from datetime import datetime, timedelta, timezone
@@ -29,14 +34,37 @@ default_args = {
     tags=["traffic", "mart", "taskflow"],
 )
 def analysis_pedestrian_accidents():
-    """蒐集 mart 層 SQL 檔案後依序執行，重建分析用資料表。"""
+    """串接兩個 task：先找出 mart 層 SQL 檔案，再依序執行。"""
 
     @task
     def task_find_sql_files(sql_files_dir):
+        """遞迴蒐集目錄底下所有 `.sql` 檔案的路徑。
+
+        Args:
+            sql_files_dir (str | Path): mart 層 SQL 腳本目錄。
+
+        Returns:
+            list[str]: 找到的 `.sql` 檔案路徑，交由下游 task 執行。
+
+        Raises:
+            FileNotFoundError: 目錄底下沒有任何 `.sql` 檔案。
+        """
         return find_sql_files(sql_files_dir)
 
     @task
     def task_exec_mart_sql_files(sql_file_paths, database):
+        """依序執行所有 mart 層 SQL 檔案，全數成功後才一次提交。
+
+        Args:
+            sql_file_paths (list[str]): 要執行的 `.sql` 檔案路徑。
+            database (str): 目標資料庫名稱。
+
+        Returns:
+            None: 本 task 只有副作用。
+
+        Raises:
+            pymysql.MySQLError: 任一檔案執行失敗，整批事務復原後往外拋。
+        """
         exec_mart_sql_files(sql_file_paths, database)
         return None
 

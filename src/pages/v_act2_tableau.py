@@ -1,4 +1,8 @@
-"""修法前後分析研究頁：嵌入三張 Tableau Public 儀表板。"""
+"""Streamlit 分頁：修法前後分析研究，嵌入三張 Tableau Public 儀表板。
+
+主題是 2023 年 6 月 30 日《道路交通管理處罰條例》修法前後的事故變化。本頁不做
+任何運算，圖表都由 Tableau Public 提供，這裡只負責嵌入與版面樣式。
+"""
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -13,7 +17,10 @@ st.set_page_config(layout="wide", page_title="修法前後分析研究", page_ic
 
 
 def act5_render():
-    """渲染三個 Tableau 分頁與其共用樣式。"""
+    """畫出頁面樣式與三個嵌入 Tableau 儀表板的分頁標籤。
+
+    分頁標籤的滑鼠停留與選取狀態都改成與整體系統一致的紅色主色調。
+    """
     # 利用 data-baseweb="tab" 選擇器，修改分頁標籤 (Tabs) 的預設外觀，使 hover 與 active 狀態呈現紅色 (#E53935)，與整體系統主色調統一
     st.markdown(
         """
@@ -63,6 +70,17 @@ def act5_render():
     # 建立一個通用的 HTML 產生器，利用 <object> 標籤與 Tableau 的 JavaScript API (viz_v1.js)，將公開的 Tableau Dashboard 嵌入到 Streamlit 中
     # 傳入不同的 url_path 即可共用同一段嵌入代碼
     def get_tableau_html(url_path, static_image):
+        """組出嵌入單一 Tableau 儀表板所需的 HTML。
+
+        三個分頁共用同一段嵌入程式碼，只有儀表板路徑與預覽圖不同。
+
+        Args:
+            url_path (str): Tableau Public 上的儀表板路徑，例如 `"shared/JJ6HP2KN6"`。
+            static_image (str): 載入前顯示的預覽圖網址。
+
+        Returns:
+            str: 可交給 `components.html()` 渲染的 HTML 字串。
+        """
         return f"""
         <div class='chart-container'>
             <div class='tableauPlaceholder' style='position: relative; width: 100%; height: 850px;'>
@@ -121,7 +139,14 @@ def act5_render():
 
 
 def main():
-    """繪製修法前後分析研究頁。"""
+    """組出修法前後分析研究頁。
+
+    取得夜市主檔只為了畫出側邊欄，本頁的圖表本身不依賴它。資料服務層故障時，
+    前端是例外停止傳播之處，因此完整記錄後顯示錯誤訊息並中止本次渲染。
+
+    Notes:
+        前端負責決定如何降級，參考 ADR-0003。
+    """
     # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     try:
         df_market = ds.get_all_nightmarkets()

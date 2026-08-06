@@ -12,7 +12,33 @@ logger = get_logger(__name__)
 
 
 def t_fact_accident_env(csvfile_paths: list[str]) -> pd.DataFrame:
-    """S"""
+    """從事故 CSV 清洗出事故環境事實資料，一件事故一列。
+
+    逐檔讀入後清洗日期、時間、經緯度與速限，合併所有檔案後回頭查四張表取得
+    關聯：`dim_accident_day` 取日編號、`dim_road_design` 與 `dim_lane_design`
+    取道路與車道設計編號，最後以日期、時間、經緯度四欄比對 `fact_accident_main`
+    取得 `accident_id`。因此執行前那三張維度表與事故主檔都必須已經載入。
+
+    一件事故只會有一筆環境資料，所以去重與排序的依據與主檔相同。
+
+    Args:
+        csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
+
+    Returns:
+        pandas.DataFrame: 事故環境資料，空值已轉成 `None` 以便寫入 MySQL，形如：
+
+            accident_id      weather_condition  light_condition  speed_limit_primary_party  road_design_id  lane_design_id  road_surface_condition
+            2024010100000001  晴                日間自然光線      50                         3               7               乾燥
+            2024010100000002  雨                夜間有照明        60                         5               2               濕潤
+
+    Raises:
+        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
+        FileNotFoundError: 清單中的某個路徑不存在。
+        SQLAlchemyError: 查詢維度表或事故主檔失敗。
+
+    Notes:
+        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010。
+    """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
 

@@ -1,4 +1,9 @@
-"""各縣市夜市事故比較分析頁：以縣市／夜市為單位做安全對標與 YoY 排名。"""
+"""Streamlit 分頁：各縣市夜市事故比較，以縣市與夜市為單位做安全對標與年增率排名。
+
+資料同樣來自 DAG 預先算好的全臺總表（Redis 鍵 `market:national_master_df`）。
+`REGION_ORDER` 與 `CITY_ORDER` 兩個常數把地區與縣市的順序寫死，讓下拉選單與
+圖表都維持習慣的地理順序，而不是依資料出現的先後排列。
+"""
 
 import pandas as pd
 import plotly.express as px
@@ -50,10 +55,31 @@ CITY_ORDER = [
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_real_city_data():
-    """讀取全台夜市周邊事故總表，補上區域與季別標籤。
+    """讀取全臺夜市周邊事故總表，補上地區與季別標籤。
 
-    快取「故障」與「未命中」語意分離（ADR-0003）：前者由 get_cache 拋
-    RedisError 交呼叫端處理，後者才回傳空表。
+    先依 `accident_id` 去重，避免跨夜市重疊區域的事故被重複計算，再算出
+    `year_quarter`（形如 `"2024 Q1"`）並依縣市對應到地區。名稱或地址含琉球、
+    蘭嶼、綠島的夜市另外歸到「東部與東部離島」，比照資料服務層的判定方式。
+    結果以 Streamlit 快取存在伺服器記憶體 1 小時。
+
+    「快取故障」與「快取裡沒有這筆資料」是兩回事：前者拋出例外交呼叫端處理，
+    後者才回傳空表。
+
+    Returns:
+        pandas.DataFrame: 補好標籤的總表，形如：
+
+            accident_id      accident_date  city    region  year_quarter  nightmarket_name  pdi_score
+            2024010100000001  2024-01-01     臺北市  北部    2024 Q1       士林夜市          3.0
+            2024010100000002  2024-01-01     臺中市  中部    2024 Q1       逢甲夜市          15.0
+
+            快取不存在或為空時回傳空 DataFrame。
+
+    Raises:
+        RedisError: 讀取快取失敗。
+        SQLAlchemyError: 取夜市主檔時查詢 MySQL 失敗。
+
+    Notes:
+        「快取故障」與「快取裡沒有這筆資料」的語意分離參考 ADR-0003。
     """
     df = get_cache("market:national_master_df")
     if df is None or df.empty:
@@ -121,7 +147,19 @@ def get_real_city_data():
 # 動態風險評級函數
 # 依據傳入的數值與區域基準值(benchmark) 計算落差比例
 def get_risk_level(val, benchmark):
-    """依據與基準值的差距，給予分級標籤"""
+    """依據數值與基準值的落差比例，給出風險分級標籤與對應顏色。
+
+    高於基準 30% 以上為極危險、15% 以上為危險、5% 以上為注意，落在正負 5% 內
+    為基準水準，低於基準 5% 以上為安全。
+
+    Args:
+        val (float): 要評級的數值，例如某個夜市的 PDI 平均。
+        benchmark (float): 比較基準，例如該地區的 PDI 平均。
+
+    Returns:
+        tuple[str, str]: （分級標籤, 色碼），形如 `("🔴 極危險", "#ef4444")`；
+            基準為 0 或任一值缺漏時回傳 `("⚪ 無資料", "#94a3b8")`。
+    """
     if benchmark == 0 or pd.isna(benchmark) or pd.isna(val):
         return "⚪ 無資料", "#94a3b8"
     ratio = (val - benchmark) / benchmark
@@ -138,7 +176,18 @@ def get_risk_level(val, benchmark):
 
 
 def main():
-    """繪製各縣市夜市事故比較分析頁。"""
+    """組出各縣市夜市事故比較分析頁。
+
+    流程是：取得夜市主檔並畫出側邊欄與頁面樣式 → 讀取補好標籤的總表 → 讓使用者
+    選擇地區、縣市與比較基準 → 顯示 KPI 數據方塊、風險分級、年增率排名與各項
+    圖表。
+
+    資料服務層或快取服務故障時，前端是例外停止傳播之處，因此完整記錄後顯示
+    錯誤訊息並中止本次渲染。
+
+    Notes:
+        前端負責決定如何降級，參考 ADR-0003。
+    """
     # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     try:
         df_market = ds.get_all_nightmarkets()
@@ -187,7 +236,7 @@ def main():
     try:
         df_raw = get_real_city_data()
     except RedisError:
-        # 快取「故障」與快取「未命中」自 ADR-0003 起語意分離：
+        # 快取「故障」與「快取裡沒有這筆資料」自 ADR-0003 起語意分離：
         # 前者拋 RedisError，後者才會回傳空表。
         logger.error("全台總表快取讀取失敗", exc_info=True)
         st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
@@ -393,6 +442,18 @@ def main():
             sub_benchmark = 0
 
         def get_kpi_subtitle(val, benchmark, is_pdi, c_unit):
+            """組出 KPI 方塊下方那行「與基準的差距」文字。
+
+            Args:
+                val (float): 本次的數值。
+                benchmark (float): 比較基準，通常是全國平均。
+                is_pdi (bool): 指標是否為 PDI，決定小數位數。
+                c_unit (str): 數值單位，顯示在基準值後面。
+
+            Returns:
+                str: 形如 `"+1.24 (+8.3%)<br>國均14.90 分"` 的 HTML 片段；
+                    基準為 0 或缺漏時回傳 `"無基準資料"`。
+            """
             if benchmark == 0 or pd.isna(benchmark):
                 return "無基準資料"
             diff = val - benchmark
@@ -795,6 +856,17 @@ def main():
                     df_yoy_transposed.index = ["排名", row_label]
 
                     def color_yoy_row(row):
+                        """替年增率那一列上色，上升標紅、下降標綠。
+
+                        供 `DataFrame.style.apply()` 逐列呼叫。
+
+                        Args:
+                            row (pandas.Series): 表格的一列。
+
+                        Returns:
+                            list[str]: 與該列等長的 CSS 樣式字串；非年增率的列
+                                回傳空字串，不上色。
+                        """
                         if row.name == row_label:
                             return [
                                 "color: #ef4444; font-weight: bold;"

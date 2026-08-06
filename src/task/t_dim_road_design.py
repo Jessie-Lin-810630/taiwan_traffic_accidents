@@ -10,11 +10,28 @@ logger = get_logger(__name__)
 
 
 def t_dim_road_design(csvfile_paths: list[str]) -> pd.DataFrame:
-    """這個函式的目的是從csv檔案中讀取交通事故資料，並且從中萃取出車道設計的維度表。
+    """從事故 CSV 萃取出道路設計維度資料，一種道路設計一列。
 
-    這個維度表會包含每一種車道類型的唯一ID、名稱、描述等資訊，方便後續分析使用。
-    :param csvfile_paths: 包含csv檔案路徑的列表，這些csv檔案是從政府資料開放平台爬取的交通事故資料。
-    :return: 一個DataFrame，包含車道設計維度表的資料。
+    逐檔讀入後先各自去重，合併再去重一次，因此跨年度重複出現的道路設計只會
+    留下一列。去重的依據是道路類別與道路型態大小類三欄的組合，與資料表的
+    唯一鍵一致。傳入空清單視為上游故障而拋出，不是回傳空 DataFrame。
+
+    Args:
+        csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
+
+    Returns:
+        pandas.DataFrame: 去重後的道路設計，索引已重設，形如：
+
+            road_type_primary_party  road_form_major  road_form_minor
+            市區道路                 交岔路           四岔路
+            省道                     直路             一般直路
+
+    Raises:
+        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
+        FileNotFoundError: 清單中的某個路徑不存在。
+
+    Notes:
+        空清單視為故障參考 ADR-0003，CSV 讀取契約參考 ADR-0010。
     """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
