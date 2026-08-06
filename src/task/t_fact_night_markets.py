@@ -589,7 +589,7 @@ def t_fact_night_markets(
         # 爬蟲難免有重複取得之資料，做去重
         df_night_markets = df_night_markets.drop_duplicates(keep="first")
         logger.info(
-            f"Successfully cleaned the records of the No.{i}~{i + batch_size} potential night market..."
+            f"Successfully cleaned the records of the No.{i}~{i + size} potential night market..."
         )
         l_fact_night_markets(df_night_markets, database)
     return None
