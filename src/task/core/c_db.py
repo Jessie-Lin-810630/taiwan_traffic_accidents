@@ -43,7 +43,8 @@ def get_accident_table_with_main_day(
 ) -> pd.DataFrame:
     """查詢事故主檔並串接日期維度，附帶預先組好的地圖 tooltip 文字。
 
-    起訖日期都給定且格式正確時才會加上日期範圍條件，否則撈全表。tooltip 文字
+    兩個日期都不給時撈全表；要篩選就必須成對給定且格式正確，否則拋出，不會
+    靜默退回全表。日期以 bind parameter 傳入，不內插進查詢字串。tooltip 文字
     在查詢階段就先組好，可減輕前端地圖渲染迴圈的運算負擔。
 
     Args:
@@ -63,6 +64,7 @@ def get_accident_table_with_main_day(
                 受傷：1 人
 
     Raises:
+        ValueError: 兩個日期沒有成對傳入，或不是 (年, 月, 日) 三個整數的序列。
         SQLAlchemyError: 連線或查詢失敗。
     """
     query_str = """SELECT m.accident_id,
@@ -79,23 +81,31 @@ def get_accident_table_with_main_day(
                         JOIN dim_accident_day d
                             ON m.day_id = d.day_id
                 """
-    if start_date and end_date:
-        if (
+    params = None
+    if start_date or end_date:
+        if not (start_date and end_date):
+            raise ValueError(
+                f"start_date 與 end_date 必須成對傳入，收到 {start_date}、{end_date}"
+            )
+        if not (
             len(start_date) == 3
             and len(end_date) == 3
-            and all([isinstance(i, int) for i in start_date])
-            and all([isinstance(j, int) for j in end_date])
+            and all(isinstance(i, int) for i in start_date)
+            and all(isinstance(j, int) for j in end_date)
         ):
-            start_date_str = "-".join((str(i) for i in start_date))
-            end_date_str = "-".join((str(j) for j in end_date))
-            query_str += f"""WHERE accident_date
-                                BETWEEN '{start_date_str}' AND '{end_date_str}';
-                            """
-    else:
-        query_str += ";"
+            raise ValueError(
+                f"日期須為 (年, 月, 日) 三個整數的序列，收到 {start_date}、{end_date}"
+            )
+        query_str += """WHERE accident_date
+                            BETWEEN :start_date AND :end_date
+                        """
+        params = {
+            "start_date": "-".join(str(i) for i in start_date),
+            "end_date": "-".join(str(j) for j in end_date),
+        }
 
     df_acc_dj_cross_time = get_table_from_sqlserver(
-        query_str, database="traffic_accidents"
+        query_str, params, database="traffic_accidents"
     )
 
     # 計算邏輯：預先組合好 tooltip 文字
