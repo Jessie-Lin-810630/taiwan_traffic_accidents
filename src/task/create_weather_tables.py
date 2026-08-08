@@ -14,7 +14,7 @@ from src.util.mysql_utils import create_tables
 # key 必須與 DDL 實際建立的表同名，因為 create_tables() 會以它在內部做 IF EXISTS 檢查。
 WEATHER_TABLES = {
     "fact_hourly_weather": """CREATE TABLE IF NOT EXISTS `fact_hourly_weather`(
-                        `weather_record_id` BIGINT AUTO_INCREMENT,
+                        `weather_record_id` BIGINT AUTO_INCREMENT COMMENT '天氣觀測紀錄編號',
                         `observation_datetime` DATETIME NOT NULL COMMENT '觀測日期時間(yyyy/mm/dd_HH:MM)',
                         `temperature_degree` DECIMAL(6,2) COMMENT '氣溫(℃)',
                         `apparent_temperature_degree` DECIMAL(6,2) COMMENT '體感溫度(℃)',

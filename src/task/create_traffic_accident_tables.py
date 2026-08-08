@@ -68,6 +68,7 @@ TRAFFIC_ACCIDENT_TABLES = {
                                     `accident_id` VARCHAR(16) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
                                     `accident_type_id` BIGINT NOT NULL COMMENT '事故類別編號ID',
                                     `day_id` INT NOT NULL COMMENT '日編號ID',
+                                    `weather_record_id` BIGINT NOT NULL DEFAULT -1 COMMENT '天氣觀測紀錄編號',
                                     `accident_time` time COMMENT '車禍時段(HH:MM:SS)',
                                     `death_count` INT COMMENT '死亡人數',
                                     `injury_count` INT COMMENT '受傷人數',
@@ -78,7 +79,7 @@ TRAFFIC_ACCIDENT_TABLES = {
                                     CONSTRAINT `fk_fact_accmain_dayid` FOREIGN KEY (`day_id`)
                                         REFERENCES `dim_accident_day`(`day_id`),
                                     UNIQUE KEY `uk_fact_accmain_daytimelonlat` (`day_id`, `accident_time`,
-                                                                                 `longitude`,`latitude`),
+                                                                                `longitude`,`latitude`),
                                     INDEX `idx_fact_accmain_lon` (`longitude`),
                                     INDEX `idx_fact_accmain_lat` (`latitude`)
                                     ) CHARSET=utf8mb4 COMMENT='車禍案件事實表';

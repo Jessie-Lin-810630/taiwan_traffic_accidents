@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.task.e_crawling_weather import round_to_weather_grid
 from src.util.logger_crtx import get_logger
+from src.util.mysql_utils import get_table_from_sqlserver
 
 logger = get_logger(__name__)
 
@@ -140,3 +141,97 @@ def t_fact_hourly_weather(
         f"to be loaded to MySQL."
     )
     return df_weather_final
+
+
+def t_fact_main_ref_to_fact_weather(
+    target_year: int,
+    df_all_acc_loc: pd.DataFrame,
+    *,
+    database: str | None = None,
+) -> pd.DataFrame:
+    """回讀已寫入 MySQL 的天氣觀測資料，算出每筆事故該指向哪一筆 `weather_record_id`。
+
+    `fact_accident_main.weather_record_id` 目前採 soft reference，值參考到
+    `fact_hourly_weather` 的 auto increment primary key，
+    因此必須等天氣資料寫進 MySQL 之後回讀才能取得。
+
+    Args:
+        target_year (int): 要回填的年份，對應 `observation_datetime` 的西元年。
+        df_all_acc_loc (pandas.DataFrame): 每筆事故的進位座標與整點化時間，
+            即 `e_get_all_acc_geo()` 的產出。
+        database (str | None): 資料表所在的資料庫名稱。
+
+    Returns:
+        pandas.DataFrame: 兩欄的對照表，形如：
+
+            accident_id  weather_record_id
+            1130101001   1024
+            1130101002   2371
+
+        沒有任何事故配對到天氣觀測時，回傳空 DataFrame（欄位仍在）。
+
+    Raises:
+        SQLAlchemyError: 查詢失敗。
+        KeyError: 任一側缺少 merge 所需的欄位。
+
+    Notes:
+        兩側座標記得走同一支進位函式，參考 ADR-0012，否則 merge 可能不精準。
+    """
+    # 1. 指派要查詢的資料表名稱
+    table_name = "fact_hourly_weather"
+
+    # 2. 撰寫DQL語句。
+    # 刻意不寫成 YEAR(observation_datetime) = :target_year
+    # 欄位被函式包住會無法有效運用索引好處 idx_fact_hourly_weather_obt，但資料列是百萬列等級。
+    query = f"""SELECT weather_record_id,
+                       observation_datetime,
+                       longitude_round,
+                       latitude_round
+                    FROM {table_name}
+                        WHERE observation_datetime >= :year_start
+                          AND observation_datetime < :next_year_start;
+            """
+
+    # 3. 從MySQL server取得資料表
+    logger.info(f"Querying TABLE {table_name} FROM DATABASE {database}...")
+    df_weather_record = get_table_from_sqlserver(
+        query,
+        {
+            "year_start": f"{target_year}-01-01 00:00:00",
+            "next_year_start": f"{target_year + 1}-01-01 00:00:00",
+        },
+        database=database,
+    )
+    logger.info(
+        f"Finished the query! The fetched result contains columns: \n {df_weather_record.columns}"
+    )
+
+    # 4. 將天氣與事故事實表 join 後取得 weather_record_id
+    # 保險措施，再跟 df_all_acc_loc 對齊一次型別與小數點位數
+    df_weather_record["longitude_round"] = round_to_weather_grid(
+        df_weather_record["longitude_round"]
+    )
+    df_weather_record["latitude_round"] = round_to_weather_grid(
+        df_weather_record["latitude_round"]
+    )
+    # MySQL 的 DATETIME 讀回來是 datetime 物件，轉成 "YYYY-MM-DD HH:MM:SS" 字串
+    # 才與事故側的 approx_accident_datetime 同格式。
+    df_weather_record["observation_datetime"] = df_weather_record[
+        "observation_datetime"
+    ].astype(str)
+
+    df_mrg = df_all_acc_loc.merge(
+        df_weather_record,
+        how="inner",
+        left_on=["approx_accident_datetime", "lon_round", "lat_round"],
+        right_on=["observation_datetime", "longitude_round", "latitude_round"],
+        suffixes=["_a", "_w"],
+    )
+
+    df_mrg = df_mrg.loc[:, ["accident_id", "weather_record_id"]]
+
+    logger.info(
+        f"FOR Year {target_year}: {len(df_mrg)}/{len(df_all_acc_loc)} 筆事故"
+        f"配對到 fact_hourly_weather 的觀測紀錄"
+    )
+    return df_mrg

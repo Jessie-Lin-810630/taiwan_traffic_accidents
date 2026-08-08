@@ -11,10 +11,13 @@ from src.task.e_crawling_weather import (
     e_get_all_acc_geo,
     weather_data_prefix,
 )
-from src.task.t_fact_hourly_weather import t_fact_hourly_weather
+from src.task.t_fact_hourly_weather import (
+    t_fact_hourly_weather,
+    t_fact_main_ref_to_fact_weather,
+)
 from src.util import gcs_utils
 from src.util.logger_crtx import get_logger
-from src.util.mysql_utils import get_engine_to_mysql, upsert_to_table
+from src.util.mysql_utils import get_engine_to_mysql, update_table, upsert_to_table
 
 logger = get_logger(__name__)
 
@@ -32,6 +35,8 @@ def l_fact_hourly_weather(
     - 先取得該年度所有事故的座標與時間。
     - 列出 GCS 上已經下載好的觀測點 Parguet 檔案，一個檔案都沒有則直接 raise，
     - 再每 `batch_size` 個 Parguet 檔案打開合併成一批，清洗後 upsert。
+    - 全部批次寫完後，回讀天氣表的 primary key，回填成 `fact_accident_main`
+      的 `weather_record_id`（soft reference）。
 
     缺欄的損壞檔案會被跳過並記 warning，最後結算比例，採少量容忍 20%，超過則 raise。
 
@@ -136,3 +141,16 @@ def l_fact_hourly_weather(
         logger.warning(f"{target_year} 年跳過 {skipped_files}/{len(all_files)} 個檔案")
 
     logger.info(f"Successfully loaded {target_year} data to MySQL：{total_rows} 列")
+
+    # 7. 回讀 fact_hourly_weather 的 autoincrement pk，回填成 fact_accident_main 的
+    # soft reference。
+    df_main_ref = t_fact_main_ref_to_fact_weather(
+        target_year, df_all_acc_loc, database=database
+    )
+    update_table(
+        df_main_ref,
+        table="fact_accident_main",
+        where_columns=["accident_id"],
+        set_columns=["weather_record_id"],
+        database=database,
+    )

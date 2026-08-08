@@ -130,6 +130,7 @@ def accident_weather_pipeline():
 
         觸發條件是上游全部結束（不論成敗），因為抓取被 API 額度打斷是這個設計的
         正常狀態，已經落地 GCS 的資料要先進 MySQL，不必等全部抓完。
+        寫完後順帶回填 `fact_accident_main` 的 `weather_record_id`。
 
         Args:
             target_year (int): 要清洗並寫入的年份。
