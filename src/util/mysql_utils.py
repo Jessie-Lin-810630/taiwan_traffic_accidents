@@ -509,3 +509,98 @@ def upsert_to_table(
         close_quietly(conn, "connection")
 
     return None
+
+
+def update_table(
+    df: pd.DataFrame,
+    table: str,
+    where_columns: list[str],
+    set_columns: list[str],
+    database: str | None = None,
+) -> None:
+    """把 DataFrame 整批更新回既有資料列，含 commit、rollback 與連線關閉。
+
+    此函式將 SQL 組成 `UPDATE ... SET ... WHERE ...` ，以 `executemany()` 一次送出，
+    寫入失敗會先復原事務再樣往 raise 例外。
+
+    Args:
+        df (pandas.DataFrame): 待更新的資料，須同時含 `set_columns` 與
+            `where_columns` 的所有欄位；欄位順序不影響結果，內部會重排。
+        table (str): 目標資料表名稱。
+        where_columns (list[str]): 用來定位資料列的欄位名，會被組成
+            `col=%s AND ...`；不可為空，否則會更新整張表。
+        set_columns (list[str]): 要被更新的欄位名，會被組成 `col=%s`；不可為空。
+        database (str | None): 資料表所在的資料庫名稱。
+
+    Raises:
+        ValueError: `set_columns` 或 `where_columns` 為空，SQL 無法安全組成。
+        KeyError: `df` 缺少 `set_columns` 或 `where_columns` 中的欄位。
+        pymysql.MySQLError: 更新失敗，事務復原後原樣往外拋。
+        Exception: 其他非預期錯誤，同樣復原事務後往外拋。
+    """
+    if not set_columns or not where_columns:
+        raise ValueError(
+            f"update 至 `{table}` 需要至少一個 set_columns 與 where_columns 欄位"
+        )
+
+    missing = [c for c in set_columns + where_columns if c not in df.columns]
+    if missing:
+        raise KeyError(f"update 至 `{table}` 缺少欄位：{missing}")
+
+    # 1. 準備 UPDATE 資料表時需要的 SQL 語句
+    set_part = ", ".join(f"{col}=%s" for col in set_columns)  # col1=%s, col2=%s
+    where_part = " AND ".join(
+        f"{col}=%s" for col in where_columns
+    )  # col3=%s AND col4=%s
+
+    dml_str = f"""UPDATE {table} SET {set_part}
+                WHERE ({where_part});
+                """
+    # 佔位符的順序是先 SET 後 WHERE，欄位順序必須跟著對齊
+    df = df.loc[:, set_columns + where_columns]
+
+    # 這裡刻意不用 upsert_to_table 的 `df.values.tolist()`：本函式常帶著資料庫
+    # 自增而來的 int64 欄位，`numpy.int64` 不是 `int` 的子類，pymysql 會拒收；
+    # `to_records().tolist()` 會轉成原生 Python 型別。
+    data = df.to_records(index=False).tolist()
+
+    if not data:
+        logger.warning(f"沒有任何資料列要更新到 `{table}`，略過")
+        return None
+
+    logger.info(f"==== Starting updating table `{table}` ====")
+
+    conn = None
+    cursor = None
+
+    try:
+        # 2. 建立連線與游標
+        conn = get_pymysql_conn_to_mysql(database)
+        cursor = conn.cursor()
+
+        # 3. 執行批次寫入與提交
+        cursor.executemany(dml_str, data)
+        conn.commit()
+
+    except pymysql.MySQLError:
+        # 4. 資料庫例外處理：復原事務，並重新拋出原始錯誤
+        logger.error(f"Database error while updating `{table}`.")
+        if conn:
+            conn.rollback()
+            logger.info("Transaction rollbacked successfully.")
+        raise
+
+    except Exception:
+        logger.error(f"Unexpected error while updating `{table}`.")
+        if conn:
+            conn.rollback()
+        raise
+
+    else:
+        logger.info(f"==== Successfully updated table `{table}` ====")
+
+    finally:
+        close_quietly(cursor, "cursor")
+        close_quietly(conn, "connection")
+
+    return None
