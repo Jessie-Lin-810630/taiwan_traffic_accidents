@@ -483,8 +483,8 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
         pandas.DataFrame: 一筆事故一列，形如：
 
             accident_id  lat_round  lon_round  approx_accident_datetime
-            1130101001   25.05      121.55     2024-01-01T08:00:00
-            1130101002   24.15      120.65     2024-01-01T10:00:00
+            1130101001   25.05      121.55     2024-01-01 08:00:00
+            1130101002   24.15      120.65     2024-01-01 10:00:00
 
     Raises:
         SQLAlchemyError: 查詢失敗。
@@ -497,9 +497,11 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     table_name_to_join = "dim_accident_day"
 
     # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
+    # 分隔符是空白不是 "T"：天氣側在 t_fact_hourly_weather 會把 ISO8601 的 "T"
+    # 換成空白，兩側只要有一邊不同，merge 會一列都對不上而且不會報錯。
     query = f"""SELECT t1.accident_id,
                        concat(t2.accident_date,
-                              "T",
+                              " ",
                               (SEC_TO_TIME(ROUND(
                                             TIME_TO_SEC(
                                                 time(t1.accident_time)
