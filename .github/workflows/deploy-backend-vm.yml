@@ -69,6 +69,8 @@ jobs:
               echo 'AIRFLOW_ADMIN_PASSWORD=${{ secrets.AIRFLOW_ADMIN_PASSWORD }}' >> .env &&
               echo 'AIRFLOW_ADMIN_EMAIL=${{ secrets.AIRFLOW_ADMIN_EMAIL }}' >> .env &&
 
+              export GIT_SSH_COMMAND='ssh -i ~/.ssh/for_git_clone -o IdentitiesOnly=yes' &&
+
               git pull origin refactor/util-connection-layer &&
 
               docker compose up -d --build
