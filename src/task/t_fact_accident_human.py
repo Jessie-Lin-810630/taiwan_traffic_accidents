@@ -39,12 +39,14 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
             2024010100000001  2               0                          女      28   自用小客車          0            9b7e...40aa
 
     Raises:
-        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
+        ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV；
+            或有列在 `fact_accident_main` 找不到對應的事故，代表主檔缺漏或錯亂。
         FileNotFoundError: 清單中的某個路徑不存在。
         SQLAlchemyError: 查詢維度表或事故主檔失敗。
 
     Notes:
-        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010。
+        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010，
+        對不到主檔就地 raise 參考 ADR-0014。
     """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
@@ -125,6 +127,17 @@ def t_fact_accident_human(csvfile_paths: list[str]) -> pd.DataFrame:
         left_on=["day_id", "accident_time", "longitude", "latitude"],
         right_on=["day_id", "accident_time", "longitude", "latitude"],
     )
+
+    # 對不到主檔代表主檔缺漏或錯亂，在這裡停下來才說得出是哪幾筆對不上
+    unmatched = df_merged["accident_id"].isna()
+    if unmatched.any():
+        sample = df_merged.loc[
+            unmatched, ["day_id", "accident_time", "longitude", "latitude"]
+        ].head(5)
+        raise ValueError(
+            f"有 {unmatched.sum()} 列在 fact_accident_main 找不到對應的事故，"
+            f"前 5 筆對不上的鍵：\n{sample}"
+        )
 
     # 生成row_hash
     uk = (
