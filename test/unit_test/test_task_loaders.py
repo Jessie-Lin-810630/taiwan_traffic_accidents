@@ -18,7 +18,12 @@ LOADER_DECLARATIONS = [
     ("l_dim_road_design", "dim_road_design", ["road_form_minor"]),
     ("l_fact_accident_env", "fact_accident_env", ["weather_condition"]),
     ("l_fact_accident_human", "fact_accident_human", ["hit_and_run"]),
-    ("l_fact_accident_main", "fact_accident_main", ["accident_time"]),
+    # 唯一鍵四欄與 weather_record_id 都不得列入 update_columns，參考 ADR-0014
+    (
+        "l_fact_accident_main",
+        "fact_accident_main",
+        ["accident_type_id", "death_count", "injury_count"],
+    ),
     (
         "l_fact_night_markets",
         "fact_night_markets",

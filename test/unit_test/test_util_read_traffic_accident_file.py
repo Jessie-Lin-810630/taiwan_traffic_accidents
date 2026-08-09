@@ -253,7 +253,9 @@ class Test事實表端到端:
         assert row["accident_time"] == "08:30:00"
         assert row["death_count"] == 0
         assert row["injury_count"] == 2
-        assert row["accident_id"] == "20240101" + "1".zfill(8)
+        # 前 8 碼是日期、其後 16 碼是唯一鍵四欄的雜湊，參考 ADR-0014
+        assert row["accident_id"].startswith("20240101")
+        assert len(row["accident_id"]) == 24
 
     def test_human_的肇逃欄拿到真實值而不是恆為零(self, tmp_path):
         """舊表頭缺的是共享經濟欄，肇逃欄本來就在 —— 錯位修好後它必須是真值。"""

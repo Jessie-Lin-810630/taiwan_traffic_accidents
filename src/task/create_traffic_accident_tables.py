@@ -64,8 +64,9 @@ TRAFFIC_ACCIDENT_TABLES = {
                                 ) charset=utf8mb4 COMMENT '事故類別維度表';
                             """,
     # 使用 accident_id 作為主鍵，並以 day_id、accident_time、longitude、latitude 的組合作為唯一鍵確保業務邏輯不重複，並在經緯度上建立索引以加速地理空間查詢
+    # accident_id 是「日期八碼 + 唯一鍵四欄的 SHA-256 前 16 碼」共 24 碼，在 T 階段生成，參考 ADR-0014
     "fact_accident_main": """CREATE TABLE IF NOT EXISTS `fact_accident_main` (
-                                    `accident_id` VARCHAR(16) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
+                                    `accident_id` VARCHAR(24) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
                                     `accident_type_id` BIGINT NOT NULL COMMENT '事故類別編號ID',
                                     `day_id` INT NOT NULL COMMENT '日編號ID',
                                     `weather_record_id` BIGINT NOT NULL DEFAULT -1 COMMENT '天氣觀測紀錄編號',
@@ -86,7 +87,7 @@ TRAFFIC_ACCIDENT_TABLES = {
                             """,
     # main 與 env 兩張事實表互為 one-to-one，因此子表的 PRIMARY KEY 完全可以同時作為 FOREIGN KEY，參考主表的 PRIMARY KEY
     "fact_accident_env": """CREATE TABLE IF NOT EXISTS`fact_accident_env` (
-                                    `accident_id` VARCHAR(16) NOT NULL COMMENT '車禍案件編號',
+                                    `accident_id` VARCHAR(24) NOT NULL COMMENT '車禍案件編號',
                                     `weather_condition` VARCHAR(10) COMMENT '天氣簡述',
                                     `light_condition` VARCHAR(20) COMMENT '行駛路線上燈光照明狀態',
                                     `speed_limit_primary_party` SMALLINT COMMENT '行駛路線之當下速限，對應原資料集''速限''',
@@ -112,7 +113,7 @@ TRAFFIC_ACCIDENT_TABLES = {
     # row_hash 在 T 階段用 accident_id、party_sequence、age、gender、impact_point_minor_other 湊出
     "fact_accident_human": """CREATE TABLE IF NOT EXISTS `fact_accident_human` (
                                     `person_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '涉案人ID',
-                                    `accident_id` VARCHAR(16) NOT NULL COMMENT '車禍案件編號',
+                                    `accident_id` VARCHAR(24) NOT NULL COMMENT '車禍案件編號',
                                     `party_sequence` INT COMMENT '肇事責任順位',
                                     `is_primary_party_sequence` TINYINT COMMENT '是否為第一肇事者',
                                     `gender` VARCHAR(20) COMMENT '性別',

@@ -1,5 +1,7 @@
 """Transform 階段：自事故原始 CSV 清洗出事故主檔事實 DataFrame。"""
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 
@@ -19,9 +21,10 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
     查 `dim_accident_day` 與 `dim_accident_type` 兩張維度表取得外鍵，因此執行前
     這兩張維度表必須已經載入。
 
-    主鍵 `accident_id` 由「日期八碼 + 當日八位流水號」組成，流水號依排序後的
-    順序編出，因此同一份輸入重跑會得到相同的編號。去重與排序的依據都是
-    日期、時間、經緯度四欄的組合，與資料表的唯一鍵一致。
+    主鍵 `accident_id` 由「日期八碼 + 日期、時間、經緯度四欄的 SHA-256 前 16 碼」
+    組成，共 24 碼。這四欄就是資料表的唯一鍵，也是去重的依據，因此同一件事故
+    無論和哪些資料一起被處理，都會得到同一個編號 —— 來源在既有日期補登事故時
+    不會讓其他事故換號。
 
     Args:
         csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
@@ -29,9 +32,9 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
     Returns:
         pandas.DataFrame: 事故主檔資料，空值已轉成 `None` 以便寫入 MySQL，形如：
 
-            accident_id      accident_type_id  day_id  accident_time  death_count  injury_count  longitude   latitude
-            2024010100000001  12                1       08:15:00       0            1             121.552300  25.088100
-            2024010100000002  47                1       09:40:00       1            0             120.658700  24.152600
+            accident_id              accident_type_id  day_id  accident_time  death_count  injury_count  longitude   latitude
+            202401019b7e40aa3f2ac81d  12                1       08:15:00       0            1             121.552300  25.088100
+            2024010153c8b1f70d9e26ba  47                1       09:40:00       1            0             120.658700  24.152600
 
     Raises:
         ValueError: `csvfile_paths` 為空，代表上游沒有產出任何 CSV。
@@ -39,7 +42,8 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
         SQLAlchemyError: 查詢維度表失敗。
 
     Notes:
-        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010。
+        空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010，
+        主鍵由事故內容決定而非單次 run 的排序名次參考 ADR-0014。
     """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
@@ -118,22 +122,24 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
     # 去重
     df_fact_accident_main = df_merged.drop_duplicates(
         subset=["day_id", "accident_time", "longitude", "latitude"]
-    )
-    # 排序
-    df_fact_accident_main = df_fact_accident_main.sort_values(
-        by=["day_id", "accident_time", "longitude", "latitude"]
     ).reset_index(drop=True)
 
-    # 生成PK (YYYYMMDD + 8位流水號)
-    df_fact_accident_main["prefix"] = (
-        df_fact_accident_main["accident_date"].astype(str).str.replace("-", "")
-    )
-    df_fact_accident_main["cumcount"] = (
-        df_fact_accident_main.groupby("accident_date").cumcount() + 1
+    # 生成PK (YYYYMMDD + 唯一鍵四欄的SHA-256前16碼)
+    # 經緯度先格式化成固定6位小數，否則同一筆事故在不同次run會算出不同的雜湊
+    uk = (
+        df_fact_accident_main["accident_date"].astype(str)
+        + "|"
+        + df_fact_accident_main["accident_time"].astype(str)
+        + "|"
+        + df_fact_accident_main["longitude"].map(lambda v: f"{v:.6f}")
+        + "|"
+        + df_fact_accident_main["latitude"].map(lambda v: f"{v:.6f}")
     )
     df_fact_accident_main["accident_id"] = df_fact_accident_main[
-        "prefix"
-    ] + df_fact_accident_main["cumcount"].astype(str).str.zfill(8)
+        "accident_date"
+    ].astype(str).str.replace("-", "") + uk.apply(
+        lambda x: hashlib.sha256(x.encode()).hexdigest()[:16]
+    )
 
     # 留下想要的欄位
     df_fact_accident_main = df_fact_accident_main.loc[
