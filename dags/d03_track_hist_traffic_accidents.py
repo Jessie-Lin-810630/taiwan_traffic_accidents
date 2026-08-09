@@ -1,8 +1,12 @@
 """DAG d03：回補 2021 至 2025 年的歷年交通事故資料並載入 MySQL。
 
 與 d02 的流程相同，差別在資料來源是歷年的資料集頁面（一律是 ZIP），且排程為
-`None`，需要回補時手動觸發。四個 task 串成一條線：抓檔 → 三張維度表 →
-事故主檔 → 其餘兩張事實表，順序不能調換。
+`None`，需要回補時手動觸發。五個 task 串成一條線：抓檔 → 三張維度表 →
+事故主檔 → 切檔案批次 → 其餘兩張事實表，順序不能調換。
+
+最後一段走 dynamic task mapping，一個 mapped instance 處理一個檔案批次
+（幾個 CSV 由 `task_prep_file_batches` 的 `batch_size` 決定）——五年份的 65 個
+檔案一次載入需要約 10.6 GB，需注意 VM 記憶體 < 16 GB 的話會有負擔，參考 ADR-0015。
 """
 
 import os
@@ -49,7 +53,7 @@ default_args = {
     tags=["traffic", "taskflow"],
 )
 def traffic_accidents_pipeline_hist():
-    """串接歷年事故資料的抓取、轉換與載入四個 task。"""
+    """串接歷年事故資料的抓取、轉換與載入五個 task。"""
     database = os.getenv("MYSQL_DATABASE")
 
     @task(
@@ -126,21 +130,50 @@ def traffic_accidents_pipeline_hist():
         return None
 
     @task
-    def task_t_and_l_other_facts(pathlist, database):
-        """清洗並載入當事人與環境兩張事實表。
-
-        必須排在主檔之後，因為兩者都要以主檔的事故編號作為外鍵。
+    def task_prep_file_batches(pathlist, batch_size: int = 2) -> list[list[str]]:
+        """把 CSV 路徑清單切成每 `batch_size` 個一組，供下游動態展開。
 
         Args:
             pathlist (list[str]): 事故 CSV 的路徑清單，來自抓取 task。
+            batch_size (int): 一個檔案批次涵蓋幾個 CSV，預設值 2 個
+
+        Returns:
+            list[list[str]]: 每個元素是一個檔案批次的路徑清單，清單長度為 > 0 且 <= `batch_size`。
+
+        Raises:
+            ValueError: 路徑清單為空，代表上游沒有抓到任何檔案。
+        Notes:
+            `batch_size` 取捨參考 ADR-0015。
+        """
+        if not pathlist:
+            raise ValueError("pathlist 為空，上游未產出任何 CSV 檔")
+
+        batches = [
+            pathlist[i : i + batch_size] for i in range(0, len(pathlist), batch_size)
+        ]
+        return batches
+
+    # 使用 accident_load_pool 將併發壓成 1，需先到 Airflow UI 建立並把 slots 設為 1，
+    @task(pool="accident_load_pool")
+    def task_t_and_l_other_facts(pathlist, database):
+        """清洗並載入一個檔案批次的當事人與環境兩張事實表。
+
+        必須排在主檔之後，因為兩者都要以主檔的事故編號作為外鍵。以
+        `expand()` 動態展開，一個實例處理一個檔案批次；掛在 "accident_load_pool" 上
+        讓批次序列執行，否則同時展開的任務實例會一起吃掉 VM 的記憶體。
+
+        Args:
+            pathlist (list[str]): 一個檔案批次的 CSV 路徑清單。
             database (str): 目標資料庫名稱。
 
         Returns:
             None: 本 task 只有副作用。
 
         Raises:
-            ValueError: 路徑清單為空。
+            ValueError: 路徑清單為空，或有列在 `fact_accident_main` 找不到對應的事故。
             pymysql.MySQLError: 寫入失敗（含外鍵約束不成立）。
+        Notes:
+            冪等性保證說明請參考 ADR-0015 決策四。
         """
         t_done_human = t_fact_accident_human(pathlist)
         l_fact_accident_human(t_done_human, database)
@@ -151,8 +184,12 @@ def traffic_accidents_pipeline_hist():
     e_done = task_e_crawler(historical_years_urls, headers)
     dim_done = task_t_and_l_dim_tables(e_done, database)
     fact_main_done = task_t_and_l_fact_main(e_done, database)
-    fact_others_done = task_t_and_l_other_facts(e_done, database)
-    e_done >> dim_done >> fact_main_done >> fact_others_done
+    batches = task_prep_file_batches(e_done, 2)
+    # MappedOperator。一個 mapped instance 處理 一份檔案批次
+    fact_others_done = task_t_and_l_other_facts.partial(database=database).expand(
+        pathlist=batches
+    )
+    e_done >> dim_done >> fact_main_done >> batches >> fact_others_done
 
 
 # Instantiate the DAG
