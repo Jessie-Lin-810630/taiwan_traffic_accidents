@@ -5,6 +5,8 @@ on:
     branches:
       - main # 當代碼推送到main時觸發
       - refactor/util-connection-layer
+    # 同一個事件不能同時給 paths 與 paths-ignore，這裡採白名單制；
+    # docs/** 與 **.md 本來就不在白名單內，不需要另外排除。
     paths:
       - 'docker/Dockerfile.streamlit'
       - '.streamlit/**'
@@ -14,9 +16,6 @@ on:
       - 'src/app.py'
       - '.github/workflows/deploy-cloud-run.yml'
       - 'requirements.txt'
-    paths-ignore:      # 忽略以下路徑的變動
-      - '**.md'        # 所有 Markdown 文件
-      - 'docs/**'      # docs 資料夾
 
 env:
   REGION: asia-east1
