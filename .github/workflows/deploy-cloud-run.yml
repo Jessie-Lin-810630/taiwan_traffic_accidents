@@ -30,10 +30,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # $GITHUB_ENV 只在同一個 job 內有效，要傳給 Job 2 必須走 job outputs
+    # $GITHUB_ENV 只在同一個 job 內有效，要傳給 Job 2 必須走 job outputs。
+    # 注意：output 內容含 secret（例如專案 ID）時 GitHub 會拒絕寫入並留下空值，
+    # 所以這裡只傳不帶密文的 env_name 與 short_sha，image 路徑交給 Job 2 自己組。
     outputs:
       env_name: ${{ steps.vars.outputs.env_name }}
-      image_tag: ${{ steps.vars.outputs.image_tag }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -59,7 +61,7 @@ jobs:
           # 給 Job 2 用
           {
             echo "env_name=${ENV_NAME}"
-            echo "image_tag=${IMAGE}:${ENV_NAME}-${SHORT_SHA}"
+            echo "short_sha=${SHORT_SHA}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Google Auth
@@ -109,10 +111,12 @@ jobs:
       - name: Deploy to Cloud Run Service
         env:
           ENV_NAME: ${{ needs.build-and-push.outputs.env_name }}
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          SHORT_SHA: ${{ needs.build-and-push.outputs.short_sha }}
         run: |
+          IMAGE="${REGION}-docker.pkg.dev/${{secrets.GCP_PROJECT_ID}}/${AR_REPO}/${SERVICE_NAME}"
+
           gcloud run deploy "${SERVICE_NAME}-${ENV_NAME}" \
-            --image "${IMAGE_TAG}" \
+            --image "${IMAGE}:${ENV_NAME}-${SHORT_SHA}" \
             --network=default \
             --subnet=default \
             --vpc-egress=private-ranges-only \
