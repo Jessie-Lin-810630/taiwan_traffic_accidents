@@ -21,8 +21,8 @@ import pandas as pd
 from redis.exceptions import RedisError
 
 from src.task.core.c_db import (
+    get_accident_hotspots,
     get_accident_table_pedestrian_involved_in,
-    get_accident_table_with_main_day,
     get_night_markets_table,
 )
 from src.util.logger_crtx import get_logger
@@ -171,11 +171,11 @@ def haversine_distance(
 
 # 由 app 調用
 def get_accident_heatmap_data(sample_size: int = 8000):
-    """統計首頁熱力圖用的事故熱點資料。
+    """統計熱力圖用的事故熱點資料。
 
-    先讀 Redis 快取（鍵為 `traffic:global_heatmap_lite_v2`），沒有才查事故主檔。
-    查回來後做三層減量：剔除落在臺灣範圍外的座標、只留同一座標重複 3 次以上的
-    熱點、資料點仍超過 `sample_size` 就隨機抽樣（固定亂數種子，結果可重現），
+    先讀 Redis 快取（鍵為 `traffic:global_heatmap_lite_v2`），沒有才查 MySQL。
+    查詢回來的已經是聚合過的熱點 —— 落在臺灣範圍外的座標與重複不足 3 次的座標
+    都已排除。熱點數仍超過 `sample_size` 時隨機抽樣（固定亂數種子，結果可重現），
     避免前端地圖卡頓。取得後補寫快取（存活 12 小時）。
 
     Args:
@@ -188,11 +188,14 @@ def get_accident_heatmap_data(sample_size: int = 8000):
             25.088100  121.524300  17
             24.152600  120.658700  9
 
-            事故主檔查無資料時回傳空 list。
+            查無熱點時為空 DataFrame。
 
     Raises:
         RedisError: 讀取快取失敗。
         SQLAlchemyError: 查詢 MySQL 失敗。
+
+    Notes:
+        減量由 SQL 完成而非 pandas，參考 ADR-0016。
     """
     # 先拿 cache_key 從 Redis 取資料
     cache_key = "traffic:global_heatmap_lite_v2"
@@ -203,25 +206,20 @@ def get_accident_heatmap_data(sample_size: int = 8000):
 
     # 如果回傳 None 就改讀 MySQL 資料庫，並且補存入 Redis 為下一次讀取加速
     try:
-        df = get_accident_table_with_main_day()
+        # 台灣國土範圍與「同一座標重複 3 次以上才算熱點」都交給 SQL，
+        # 回來的列數是熱點數而非事故數
+        df = get_accident_hotspots(
+            lat_min=21.755,
+            lat_max=25.93916,
+            lon_min=119.30083,
+            lon_max=124.56916,
+            min_count=3,
+        )
         if df.empty:
-            return []
+            return df
 
-        df = df.dropna(subset=["latitude", "longitude"])
         df["latitude"] = df["latitude"].astype("float64")
         df["longitude"] = df["longitude"].astype("float64")
-
-        # 踢掉不在台灣國土範圍內的奇怪經緯度 (大概可減少100個點)
-        df = df[
-            (25.93916 > df["latitude"])
-            & (df["latitude"] > 21.755)
-            & (124.56916 > df["longitude"])
-            & (df["longitude"] > 119.30083)
-        ]
-
-        # 若需要，僅撈取同一座標重複發生 3 次以上的熱點，大幅縮小前端記憶體消耗
-        df = df.groupby(by=["latitude", "longitude"]).size().reset_index(name="count")
-        df = df[df["count"] >= 3]
 
         # 如果熱力圖資料點仍超過預設8000點 (sample_size)，強制隨機抽樣，避免地圖卡頓
         if len(df) > sample_size:

@@ -39,17 +39,17 @@ def get_night_markets_table() -> pd.DataFrame:
 # 2. 查詢事故事實表且串接日期維度表取得事故對應年月日
 # 動態撈取事故資料，並客製化 tooltip
 def get_accident_table_with_main_day(
-    start_date: tuple[int] | None = None, end_date: tuple[int] | None = None
+    start_date: tuple[int, int, int], end_date: tuple[int, int, int]
 ) -> pd.DataFrame:
-    """查詢事故主檔並串接日期維度，附帶預先組好的地圖 tooltip 文字。
+    """查詢某段期間的事故主檔並串接日期維度，附帶預先組好的地圖 tooltip 文字。
 
-    兩個日期都不給時撈全表；要篩選就必須成對給定且格式正確，否則拋出，不會
-    靜默退回全表。日期以 bind parameter 傳入，不內插進查詢字串。tooltip 文字
-    在查詢階段就先組好，可減輕前端地圖渲染迴圈的運算負擔。
+    兩個日期都是必填，用來界定查詢的期間；格式不正確就拋出，不會靜默放寬條件。
+    日期以 bind parameter 傳入，不內插進查詢字串。tooltip 文字在查詢階段就先組好，
+    可減輕前端地圖渲染迴圈的運算負擔。
 
     Args:
-        start_date (tuple[int] | None): 起始日期，形如 `(2024, 1, 1)` 的三個整數。
-        end_date (tuple[int] | None): 結束日期，格式同上。
+        start_date (tuple[int, int, int]): 起始日期，形如 `(2024, 1, 1)` 的三個整數。
+        end_date (tuple[int, int, int]): 結束日期，格式同上。
 
     Returns:
         pandas.DataFrame: 事故資料，查詢結果非空時多一個 `tooltip_text` 欄，形如：
@@ -66,6 +66,9 @@ def get_accident_table_with_main_day(
     Raises:
         ValueError: 兩個日期沒有成對傳入，或不是 (年, 月, 日) 三個整數的序列。
         SQLAlchemyError: 連線或查詢失敗。
+
+    Notes:
+        日期由選填改為必填的緣由，參考 ADR-0016。
     """
     query_str = """SELECT m.accident_id,
                       d.accident_date,
@@ -81,28 +84,26 @@ def get_accident_table_with_main_day(
                         JOIN dim_accident_day d
                             ON m.day_id = d.day_id
                 """
-    params = None
-    if start_date or end_date:
-        if not (start_date and end_date):
-            raise ValueError(
-                f"start_date 與 end_date 必須成對傳入，收到 {start_date}、{end_date}"
-            )
-        if not (
-            len(start_date) == 3
-            and len(end_date) == 3
-            and all(isinstance(i, int) for i in start_date)
-            and all(isinstance(j, int) for j in end_date)
-        ):
-            raise ValueError(
-                f"日期須為 (年, 月, 日) 三個整數的序列，收到 {start_date}、{end_date}"
-            )
-        query_str += """WHERE accident_date
-                            BETWEEN :start_date AND :end_date
-                        """
-        params = {
-            "start_date": "-".join(str(i) for i in start_date),
-            "end_date": "-".join(str(j) for j in end_date),
-        }
+    if not (start_date and end_date):
+        raise ValueError(
+            f"start_date 與 end_date 必須成對傳入，收到 {start_date}、{end_date}"
+        )
+    if not (
+        len(start_date) == 3
+        and len(end_date) == 3
+        and all(isinstance(i, int) for i in start_date)
+        and all(isinstance(j, int) for j in end_date)
+    ):
+        raise ValueError(
+            f"日期須為 (年, 月, 日) 三個整數的序列，收到 {start_date}、{end_date}"
+        )
+    query_str += """WHERE accident_date
+                        BETWEEN :start_date AND :end_date
+                    """
+    params = {
+        "start_date": "-".join(str(i) for i in start_date),
+        "end_date": "-".join(str(j) for j in end_date),
+    }
 
     df_acc_dj_cross_time = get_table_from_sqlserver(
         query_str, params, database="traffic_accidents"
@@ -134,6 +135,65 @@ def get_accident_table_with_main_day(
                 axis=1,
             )
     return df_acc_dj_cross_time
+
+
+# 2-1. 查詢事故熱點：範圍過濾與座標聚合都在 SQL 完成
+def get_accident_hotspots(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    min_count: int,
+) -> pd.DataFrame:
+    """查詢指定範圍內、重複次數達門檻的事故座標熱點。
+
+    範圍過濾與座標聚合都由 MySQL 完成，回傳的列數是熱點數而非事故數。經緯度為
+    `NULL` 的列不滿足範圍條件，會一併排除。五個參數皆以 bind parameter 傳入，
+    不內插進查詢字串。
+
+    Args:
+        lat_min (float): 緯度下界，含端點。
+        lat_max (float): 緯度上界，含端點。
+        lon_min (float): 經度下界，含端點。
+        lon_max (float): 經度上界，含端點。
+        min_count (int): 同一座標的最少重複次數，未達此數的座標不算熱點。
+
+    Returns:
+        pandas.DataFrame: 熱點資料，形如：
+
+            latitude   longitude   count
+            25.088100  121.524300  17
+            24.152600  120.658700  9
+
+            範圍內沒有任何座標達到門檻時為空 DataFrame。
+
+    Raises:
+        SQLAlchemyError: 連線或查詢失敗。
+
+    Notes:
+        聚合在 SQL 而非 pandas 完成，參考 ADR-0016。
+    """
+    query_str = """SELECT latitude,
+                      longitude,
+                      COUNT(*) AS count
+                    FROM fact_accident_main
+                    WHERE latitude BETWEEN :lat_min AND :lat_max
+                      AND longitude BETWEEN :lon_min AND :lon_max
+                    GROUP BY latitude, longitude
+                    HAVING COUNT(*) >= :min_count
+                """
+    params = {
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+        "min_count": min_count,
+    }
+
+    df_hotspots = get_table_from_sqlserver(
+        query_str, params, database="traffic_accidents"
+    )
+    return df_hotspots
 
 
 # 3. 查詢用路環境
