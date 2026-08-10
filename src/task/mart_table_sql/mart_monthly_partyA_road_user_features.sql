@@ -1,7 +1,7 @@
 -- 針對與行人直接相關的車禍案件，分析第一肇事者的(它可能是行人也可能是駕駛人)的用路行為
 -- 1. 先串接出第一肇事者所需的欄位：個人身份特徵與當下用路行為。
 CREATE OR REPLACE VIEW v1_humansq1 AS
-	(SELECT * 
+	(SELECT *
 		FROM fact_accident_human h
 			WHERE is_primary_party_sequence = 1);
 
@@ -33,30 +33,30 @@ CREATE OR REPLACE VIEW v3_humansq1_main_type_day AS
 
 -- 4. 將年齡分群轉為離散。將用路行為之一"車種"做分群。
 CREATE OR REPLACE VIEW v4_humansq1_main_type_day_group AS
-	SELECT 
+	SELECT
 			accident_year, accident_quarter, accident_month,
             gender, age,
 			CASE
 				WHEN age < 18 AND age > 0 THEN "< 18歲"
 				WHEN age < 20 AND age >= 18 THEN "18 & 19歲"
-				WHEN age < 90 AND age >= 20 THEN CONCAT(ROUND(age/10)*10, " - ", 
+				WHEN age < 90 AND age >= 20 THEN CONCAT(ROUND(age/10)*10, " - ",
 														(ROUND(age/10)*10+9), "歲")
 				ELSE "未知"
 			END AS age_grouped,
-			
+
 			CASE
 				WHEN vehicle_type_major LIKE "小客車" THEN "小客車(含客、貨兩用)"
 				WHEN vehicle_type_major LIKE "小貨車" THEN "小貨車(含客、貨兩用)"
-				ELSE vehicle_type_major 
+				ELSE vehicle_type_major
 			END AS vehicle_type_grouped,
-			
+
 			CASE
 				WHEN age < 18 THEN "未成年"
 				WHEN age >= 18 AND age < 65 THEN "青壯年者"
 				WHEN age >= 65 AND age < 90 THEN "銀髮族"
 				ELSE "未知"
 			END AS age_cluster,
-			
+
 			CASE
 				WHEN accident_type_major = '人與汽(機)車' THEN '人與車'
 				WHEN accident_type_major = '人與汽機車' THEN '人與車'
@@ -75,14 +75,14 @@ BEGIN
     -- 建立 tmp 表
     CREATE TABLE IF NOT EXISTS mart_monthly_partyA_road_user_features_tmp AS
 	WITH partitioned_avgs AS (
-		SELECT 
+		SELECT
 				accident_year,
 				accident_quarter,
 				accident_month,
-				gender, 
-				age_grouped, 
+				gender,
+				age_grouped,
 				age_cluster,
-				vehicle_type_grouped, 
+				vehicle_type_grouped,
 				accident_type_major_grouped,
 				AVG(age) OVER (PARTITION BY accident_year, accident_month,
 											gender, age_grouped
@@ -93,20 +93,20 @@ BEGIN
 			FROM v4_humansq1_main_type_day_group
 				WHERE age_grouped != "未知" AND accident_type_major_grouped = "人與車"
 		  )
-	SELECT  accident_year, 
-			accident_quarter, 
-			accident_month, 
-            gender, 
-            age_grouped, 
-            age_cluster, 
-            vehicle_type_grouped, 
-            accident_type_major_grouped, 
-			`各月度各年齡區間的平均年齡(男女分開計算)`, 
-			`各月度各車種駕駛人平均年齡(各年齡層分開計算)` 
-            FROM partitioned_avgs 
+	SELECT  accident_year,
+			accident_quarter,
+			accident_month,
+            gender,
+            age_grouped,
+            age_cluster,
+            vehicle_type_grouped,
+            accident_type_major_grouped,
+			`各月度各年齡區間的平均年齡(男女分開計算)`,
+			`各月度各車種駕駛人平均年齡(各年齡層分開計算)`
+            FROM partitioned_avgs
 				GROUP BY accident_year, accident_quarter, accident_month,
-						 gender, age_grouped, age_cluster, vehicle_type_grouped, 
-						 accident_type_major_grouped, `各月度各年齡區間的平均年齡(男女分開計算)`, 
+						 gender, age_grouped, age_cluster, vehicle_type_grouped,
+						 accident_type_major_grouped, `各月度各年齡區間的平均年齡(男女分開計算)`,
 						 `各月度各車種駕駛人平均年齡(各年齡層分開計算)`;
 
 
@@ -121,7 +121,7 @@ BEGIN
     -- IF/ELSE條件判斷
     IF table_exists > 0 THEN
 		RENAME TABLE
-			mmart_monthly_partyA_road_user_features to mart_monthly_partyA_road_user_features_deprecated,
+			mart_monthly_partyA_road_user_features to mart_monthly_partyA_road_user_features_deprecated,
 			mart_monthly_partyA_road_user_features_tmp to mart_monthly_partyA_road_user_features;
 
 	ELSE
@@ -134,7 +134,7 @@ CALL swap_analysis_table();
 
 DROP TABLE IF EXISTS mart_monthly_partyA_road_user_features_deprecated;
 
-DROP VIEW IF EXISTS v1_humansq1, v2_humansq1_main_type, 
+DROP VIEW IF EXISTS v1_humansq1, v2_humansq1_main_type,
 					v3_humansq1_main_type_day, v4_humansq1_main_type_day_group;
 
 DROP PROCEDURE IF EXISTS swap_analysis_table;

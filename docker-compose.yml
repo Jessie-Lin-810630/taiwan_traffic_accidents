@@ -3,8 +3,6 @@ x-airflow-common: &airflow-common
   build:
     context: .
     dockerfile: ./docker/Dockerfile.airflow
-  env_file:
-    - .env
   environment:
     # ====Airflow 3.x 核心變數 ====
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -27,22 +25,28 @@ x-airflow-common: &airflow-common
     # 核心連線設定
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql-db:3306/${MYSQL_AIRFLOW_DATABASE}
 
-    # 專案路徑與 API
+    # 專案路徑
     PYTHONPATH: "/opt/airflow/"
-    GOOGLE_MAP_API_KEY: ${GOOGLE_MAP_API_KEY}
-    REDIS_HOST: ${REDIS_HOST}
-    REDIS_PORT: ${REDIS_PORT}
-    REDIS_PASSWORD: ${REDIS_PASSWORD}
-    MYSQL_HOST: ${MYSQL_HOST}
+
+    # 以下九個是 src/ 底下的程式會 os.getenv 的全部變數，值由 compose.yml 從專案根目錄的 .env 插值。
+    # *_HOST / *_PORT 在此寫死，因為 .env 那組是給宿主機連進容器用的，
+    # 容器之間走 backend_net，要用服務名與容器實際監聽埠。
+    MYSQL_HOST: mysql-db
     MYSQL_PORT: 3306
     MYSQL_USER: ${MYSQL_USER}
     MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    MYSQL_AIRFLOW_DATABASE: ${MYSQL_AIRFLOW_DATABASE}
     MYSQL_DATABASE: ${MYSQL_DATABASE}
+    REDIS_HOST: redis-cache
+    REDIS_PORT: 6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    GOOGLE_MAP_API_KEY: ${GOOGLE_MAP_API_KEY}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./src:/opt/airflow/src
+    # ETL 抓回的原始檔與處理後的 CSV（ADR-0007）。
+    # 不掛載的話會寫進容器可寫層，docker compose up --build 之後就消失。
+    - ./data:/opt/airflow/data
   networks:
     - backend_net
   restart: always
@@ -51,17 +55,20 @@ services:
   # 1. 關聯式資料庫
   mysql-db:
     image: mysql:8.0.36
-    env_file:
-      - .env
     container_name: mysql_server
     restart: always
+    # mysql image 初始化真正會讀的變數只有 4 個，值由 compose 從專案根目錄的 .env 插值。
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # image 只會在首次啟動時建一個庫，這個名額留給 airflow metadata 庫。
+      # 業務庫另行手動建立與授權。
       MYSQL_DATABASE: ${MYSQL_AIRFLOW_DATABASE}
+      # airflow 容器與 ETL 連進來所用的帳密，image 會建這個 user 並授予上面那個庫的權限。
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    # .env 的 MYSQL_HOST / MYSQL_PORT 是宿主端連進來用的，容器本身不需要，故不注入 environment，僅在此插值。
     ports:
-      - "3306:3306"
+      - "${MYSQL_PORT}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -77,10 +84,12 @@ services:
     image: redis:7.0-alpine
     container_name: redis_server
     restart: always
+    # 下面 command 與 healthcheck 裡的 ${REDIS_PASSWORD} 由 compose.yml 插值完成，
+    # 並靠啟動參數帶入密碼到 redis server，不需要注入容器環境，故沒有 environment 區塊。
     command: >
       redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 3gb --protected-mode no
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -99,10 +108,9 @@ services:
     restart: "no" # 執行完就結束
     environment:
       # 暫時覆蓋前言所造的環境變數，讓init可以用root順利登入MySQL，因為我們目標是確認airflow-mysql可以正常連線，而不是因授權問題而被拒絕在外。
-      #
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@mysql-db:3306/${MYSQL_AIRFLOW_DATABASE}
     command: >
-      bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
+      bash -c " echo '==== 檢查環境變數 ====' && echo 'DB_CONN: $$AIRFLOW__DATABASE__SQL_ALCHEMY_CONN' && airflow version && echo '==== 開始資料庫遷移 ====' && airflow db migrate &&  echo '==== 開始建立使用者 ====' && airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD}  --firstname Jessie --lastname Lin --role Admin --email ${AIRFLOW_ADMIN_EMAIL} || true"
     depends_on:
       mysql-db: { condition: service_healthy }
       redis-cache: { condition: service_healthy }

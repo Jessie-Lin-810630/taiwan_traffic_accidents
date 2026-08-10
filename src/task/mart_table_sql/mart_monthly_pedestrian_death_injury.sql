@@ -5,21 +5,21 @@ CREATE OR REPLACE VIEW v1_accident_human_vehicle AS
 			WHERE vehicle_type_minor like "行人");
 
 CREATE OR REPLACE VIEW v2_accident_human_vehicle_rn1 AS
-	(SELECT tmp.* FROM 
+	(SELECT tmp.* FROM
 		(SELECT *, ROW_NUMBER() OVER (PARTITION BY accident_id) AS rn
 					FROM v1_accident_human_vehicle) tmp
 			WHERE tmp.rn = 1);
 
 -- 2. 由於需要車禍日期、時間、死傷人數，所以從main與day JOIN過來
-CREATE OR REPLACE VIEW v3_accident_human_vehicle_rn1_main AS 
+CREATE OR REPLACE VIEW v3_accident_human_vehicle_rn1_main AS
 	(SELECT v2.vehicle_type_minor, m.*
 		FROM fact_accident_main m -- 大表JOIN小表
 			INNER JOIN v2_accident_human_vehicle_rn1 v2
 				ON m.accident_id = v2.accident_id);
-                
+
 CREATE OR REPLACE VIEW v4_accident_human_vehicle_rn1_main_day AS
 	(SELECT v3.vehicle_type_minor,
-			d.accident_date, 
+			d.accident_date,
             v3.death_count,
             v3.injury_count
 		FROM v3_accident_human_vehicle_rn1_main v3
@@ -47,7 +47,7 @@ BEGIN
 
 	ALTER TABLE mart_monthly_pedestrian_dj_tmp
 		ADD COLUMN (
-					avg_monthly_death_btw_2021_2025 DECIMAL(10,1), 
+					avg_monthly_death_btw_2021_2025 DECIMAL(10,1),
 					stdev_monthly_death_btw_2021_2025 DECIMAL(10,1),
 					avg_monthly_injury_btw_2021_2025 DECIMAL(10,1),
 					stdev_monthly_injury_btw_2021_2025 DECIMAL(10,1),
@@ -70,7 +70,7 @@ BEGIN
 		WHERE `year` BETWEEN 2021 AND 2025;
 
 	UPDATE mart_monthly_pedestrian_dj_tmp
-		SET 
+		SET
 			avg_monthly_death_btw_2021_2025 = @avg_death,
 			stdev_monthly_death_btw_2021_2025 = @stdev_death,
 			avg_monthly_injury_btw_2021_2025 = @avg_injury,
@@ -91,7 +91,7 @@ BEGIN
     IF table_exists > 0 THEN
 
         -- 如果存在做table swap
-        RENAME TABLE 
+        RENAME TABLE
             mart_monthly_pedestrian_dj TO mart_monthly_pedestrian_dj_deprecated,
             mart_monthly_pedestrian_dj_tmp TO mart_monthly_pedestrian_dj;
 
@@ -100,7 +100,7 @@ BEGIN
 
     ELSE
         -- 如果不存在直接rename tmp表為正式表
-        RENAME TABLE 
+        RENAME TABLE
             mart_monthly_pedestrian_dj_tmp TO mart_monthly_pedestrian_dj;
     END IF;
 END;

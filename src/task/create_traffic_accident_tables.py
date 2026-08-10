@@ -1,15 +1,24 @@
-from sqlalchemy import text, Engine
-from src.util.create_db_engine_or_database import create_engine_to_mysql, create_database
-from airflow.models import Variable
-from airflow.exceptions import AirflowException
+"""交通事故星狀綱要的 DDL 宣告與建表函式。
 
+`TRAFFIC_ACCIDENT_TABLES` 以「資料表名稱對應 CREATE TABLE 敘述」的形式集中
+4 張維度表（`dim_accident_day`、`dim_road_design`、`dim_lane_design`、
+`dim_accident_type`）與 3 張事實表（`fact_accident_main`、`fact_accident_env`、
+`fact_accident_human`）的定義。字典的鍵必須與 DDL 實際建立的資料表同名，
+`create_tables()` 的存在性檢查才會正確。
 
-def create_traffic_accident_tables(engine: Engine) -> None:
-    try:
-        with engine.connect() as conn:
-            # 1.建立交通意外日維度表
-            print("Creating table 'dim_accident_day'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `dim_accident_day` (
+維度表一律以業務欄位的組合作為唯一鍵、另設自增的代理鍵供 JOIN 使用；
+建表順序即字典的順序，被外鍵參考的表都排在參考它的表之前。
+"""
+
+from sqlalchemy import Engine
+
+from src.util.mysql_utils import create_tables
+
+# key 必須與 DDL 實際建立的表同名，因為 create_tables() 會以它在內部做 IF EXISTS 檢查。
+# 不可隨便調換字典序，因為後續建表順序按照字典序，而被外鍵參考的表都排在參考它的表之前。
+TRAFFIC_ACCIDENT_TABLES = {
+    # 預計5年只會有幾千筆日期，因此以 accident_date 作為唯一鍵確保業務邏輯不重複，day_id 則作為 surrogate key 方便 JOIN
+    "dim_accident_day": """CREATE TABLE IF NOT EXISTS `dim_accident_day` (
                                     `day_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '日編號ID',
                                     `accident_date` DATE COMMENT '車禍日期',
                                     `accident_weekday` VARCHAR(10) COMMENT '車禍發生星期',
@@ -17,89 +26,68 @@ def create_traffic_accident_tables(engine: Engine) -> None:
                                     `national_activity` VARCHAR(20) COMMENT '是否有全國性活動，例如：總統上任、公投日、國定假日',
                                     CONSTRAINT `uk_dim_accidentday_date` UNIQUE (`accident_date`)
                                     ) charset=utf8mb4 COMMENT '交通意外日維度表';
-                            """)  # 預計5年只會有幾千筆日期，因此以accident_date作為唯一鍵確保業務邏輯不重複，day_id則作為surrogate key方便JOIN
-            conn.execute(ddl_text)
-            print("Table 'dim_accident_day' created successfully.")
-
-            # 2. 建立道路設計維度表
-            print("Creating table 'dim_road_design'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `dim_road_design` (
+                            """,
+    "dim_road_design": """CREATE TABLE IF NOT EXISTS `dim_road_design` (
                                     `road_design_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '道路設計編號ID',
                                     `road_type_primary_party` VARCHAR(10) COMMENT '行駛路線之道路類別，對應原資料集''道路類別''',
                                     `road_form_major` VARCHAR(10) COMMENT '道路類別之道路型態，對應原資料集''道路型態大類別名稱''',
                                     `road_form_minor` VARCHAR(10) COMMENT '道路類別之道路細項，對應原資料集''道路型態子類別名稱''',
                                     CONSTRAINT `uk_dim_roaddesign_roadtypeandform` UNIQUE (`road_type_primary_party`, `road_form_major`, `road_form_minor`)
                                     ) charset=utf8mb4 COMMENT '道路設計維度表';
-                            """)
-            conn.execute(ddl_text)
-            print("Table 'dim_road_design' created successfully.")
-
-            # 3. 建立車道設計維度表
-            print("Creating table 'dim_lane_design'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `dim_lane_design` (
+                            """,
+    # 預計5年只會有700種車道設計，因此以車道設計的各個屬性作為唯一鍵確保業務邏輯不重複，lane_design_id 則作為 surrogate key 方便 JOIN
+    "dim_lane_design": """CREATE TABLE IF NOT EXISTS `dim_lane_design` (
                                     `lane_design_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '車道設計編號ID',
                                     `lane_divider_direction_major` VARCHAR(20) COMMENT '車道分向設施大類別名稱',
                                     `lane_divider_direction_minor` VARCHAR(20) COMMENT '車道分向設施子類別名稱',
                                     `lane_divider_main_general` VARCHAR(20) COMMENT '車道分道設施-快車道或一般車道間名稱''',
                                     `lane_divider_fast_slow` VARCHAR(20) COMMENT '車道分道設施-快慢車道間名稱',
                                     `lane_edge_marking` VARCHAR(2) COMMENT '是否有路面邊線，對應原資料集''車道劃分設施-分道設施-路面邊線名稱''',
-                                    CONSTRAINT `uk_dim_lanedesign_dividerandedge` UNIQUE (`lane_divider_direction_major`, 
+                                    CONSTRAINT `uk_dim_lanedesign_dividerandedge` UNIQUE (`lane_divider_direction_major`,
                                                                                           `lane_divider_direction_minor`,
-                                                                                          `lane_divider_main_general`, 
+                                                                                          `lane_divider_main_general`,
                                                                                           `lane_divider_fast_slow`,
                                                                                           `lane_edge_marking`)
                                     ) charset=utf8mb4 COMMENT '車道設計維度表';
-                            """)  # 預計5年只會有700種車道設計，因此以車道設計的各個屬性作為唯一鍵確保業務邏輯不重複，lane_design_id則作為surrogate key方便JOIN
-            conn.execute(ddl_text)
-            print("Table 'dim_lane_design' created successfully.")
-
-            # 4. 建立事故類別維度表
-            print("Creating table 'dim_accident_type'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `dim_accident_type` (
+                            """,
+    # 預計5年只會有幾千種事故類別，因此以事故類別的各個屬性作為唯一鍵確保業務邏輯不重複，accident_type_id 則作為 surrogate key 方便 JOIN
+    "dim_accident_type": """CREATE TABLE IF NOT EXISTS `dim_accident_type` (
                                     `accident_type_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '事故類別編號ID',
                                     `accident_category` VARCHAR(2) COMMENT '車禍級別(A1、A2)',
                                     `accident_position_major` VARCHAR(20) COMMENT '事故位置大類別名稱',
                                     `accident_position_minor` VARCHAR(20) COMMENT '事故位置子類別名稱',
                                     `accident_type_major` VARCHAR(20) COMMENT '簡述此事故涉及的實體，例如：人車、兩車或一台車本身，對應原資料集-事故類型及型態大類別名稱',
                                     `accident_type_minor` VARCHAR(20) COMMENT '簡述此事故涉及的實體的相互作用，例如：追撞、側撞、翻車、衝出路外，對應原資料集-事故類型及型態大類別名稱',
-                                    CONSTRAINT `uk_dim_accidenttype_categoryandposition` UNIQUE (`accident_category`, `accident_position_major`, 
-                                                                                                 `accident_position_minor`, `accident_type_major`, 
+                                    CONSTRAINT `uk_dim_accidenttype_categoryandposition` UNIQUE (`accident_category`, `accident_position_major`,
+                                                                                                 `accident_position_minor`, `accident_type_major`,
                                                                                                  `accident_type_minor`)
                                 ) charset=utf8mb4 COMMENT '事故類別維度表';
-                            """)  # 預計5年只會有幾千種事故類別，因此以事故類別的各個屬性作為唯一鍵確保業務邏輯不重複，accident_type_id則作為surrogate key方便JOIN
-            conn.execute(ddl_text)
-            print("Table 'dim_accident_type' created successfully.")
-
-            # 5. 建立車禍事故事實表
-            print("Creating table 'fact_accident_main'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `fact_accident_main` (
-                                    `accident_id` VARCHAR(16) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
+                            """,
+    # 使用 accident_id 作為主鍵，並以 day_id、accident_time、longitude、latitude 的組合作為唯一鍵確保業務邏輯不重複，並在經緯度上建立索引以加速地理空間查詢
+    # accident_id 是「日期八碼 + 唯一鍵四欄的 SHA-256 前 16 碼」共 24 碼，在 T 階段生成，參考 ADR-0014
+    "fact_accident_main": """CREATE TABLE IF NOT EXISTS `fact_accident_main` (
+                                    `accident_id` VARCHAR(24) PRIMARY KEY NOT NULL COMMENT '車禍案件編號',
                                     `accident_type_id` BIGINT NOT NULL COMMENT '事故類別編號ID',
                                     `day_id` INT NOT NULL COMMENT '日編號ID',
+                                    `weather_record_id` BIGINT NOT NULL DEFAULT -1 COMMENT '天氣觀測紀錄編號',
                                     `accident_time` time COMMENT '車禍時段(HH:MM:SS)',
                                     `death_count` INT COMMENT '死亡人數',
                                     `injury_count` INT COMMENT '受傷人數',
                                     `longitude` decimal(10,6) COMMENT '經度',
                                     `latitude` decimal(10,6) COMMENT '緯度',
-                                    CONSTRAINT `fk_fact_accmain_accidenttypeid` FOREIGN KEY (`accident_type_id`) 
+                                    CONSTRAINT `fk_fact_accmain_accidenttypeid` FOREIGN KEY (`accident_type_id`)
                                         REFERENCES `dim_accident_type`(`accident_type_id`),
-                                    CONSTRAINT `fk_fact_accmain_dayid` FOREIGN KEY (`day_id`) 
+                                    CONSTRAINT `fk_fact_accmain_dayid` FOREIGN KEY (`day_id`)
                                         REFERENCES `dim_accident_day`(`day_id`),
                                     UNIQUE KEY `uk_fact_accmain_daytimelonlat` (`day_id`, `accident_time`,
-                                                                                 `longitude`,`latitude`),
+                                                                                `longitude`,`latitude`),
                                     INDEX `idx_fact_accmain_lon` (`longitude`),
                                     INDEX `idx_fact_accmain_lat` (`latitude`)
                                     ) CHARSET=utf8mb4 COMMENT='車禍案件事實表';
-                            """)
-            # 使用accident_id作為主鍵，並以day_id、accident_time、longitude、latitude的組合作為唯一鍵確保業務邏輯不重複，
-            # 並在經緯度上建立索引以加速地理空間查詢
-            conn.execute(ddl_text)
-            print("Table 'fact_accident_main' created successfully.")
-
-            # 6. 建立車禍案件環境事實表
-            print("Creating table 'fact_accident_env'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS`fact_accident_env` (
-                                    `accident_id` VARCHAR(16) NOT NULL COMMENT '車禍案件編號',
+                            """,
+    # main 與 env 兩張事實表互為 one-to-one，因此子表的 PRIMARY KEY 完全可以同時作為 FOREIGN KEY，參考主表的 PRIMARY KEY
+    "fact_accident_env": """CREATE TABLE IF NOT EXISTS`fact_accident_env` (
+                                    `accident_id` VARCHAR(24) NOT NULL COMMENT '車禍案件編號',
                                     `weather_condition` VARCHAR(10) COMMENT '天氣簡述',
                                     `light_condition` VARCHAR(20) COMMENT '行駛路線上燈光照明狀態',
                                     `speed_limit_primary_party` SMALLINT COMMENT '行駛路線之當下速限，對應原資料集''速限''',
@@ -121,15 +109,11 @@ def create_traffic_accident_tables(engine: Engine) -> None:
                                     CONSTRAINT `fk_fact_accidentenv_lanedesignid` FOREIGN KEY (`lane_design_id`)
                                         REFERENCES `dim_lane_design`(`lane_design_id`)
                                     ) CHARSET=utf8mb4 COMMENT='車禍案件環境事實表';
-                            """)  # main與env兩張事實表互one-to-one，因此子表的PRIMARY KEY完全可以同時作為FOREIGN KEY，參考主表的PRIMARY KEY
-            conn.execute(ddl_text)
-            print("Table 'fact_accident_env' created successfully.")
-
-            # 7. 建立車禍案件用路人行為事實表
-            print("Creating table 'fact_accident_human'...")
-            ddl_text = text("""CREATE TABLE IF NOT EXISTS `fact_accident_human` (
+                            """,
+    # row_hash 在 T 階段用 accident_id、party_sequence、age、gender、impact_point_minor_other 湊出
+    "fact_accident_human": """CREATE TABLE IF NOT EXISTS `fact_accident_human` (
                                     `person_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '涉案人ID',
-                                    `accident_id` VARCHAR(16) NOT NULL COMMENT '車禍案件編號',
+                                    `accident_id` VARCHAR(24) NOT NULL COMMENT '車禍案件編號',
                                     `party_sequence` INT COMMENT '肇事責任順位',
                                     `is_primary_party_sequence` TINYINT COMMENT '是否為第一肇事者',
                                     `gender` VARCHAR(20) COMMENT '性別',
@@ -151,13 +135,18 @@ def create_traffic_accident_tables(engine: Engine) -> None:
                                     `row_hash` VARCHAR(64) UNIQUE NOT NULL COMMENT '業務邏輯雜湊值',
                                     CONSTRAINT `fk_fact_accidenthuman_accidentid` FOREIGN KEY (`accident_id`)
                                         REFERENCES `fact_accident_main`(`accident_id`)
-                                    ) CHARSET=utf8mb4 COMMENT='車禍案件用路人行為事實表'; 
-                            """)  # row_hash (在T階段用accident_id、party_sequence、age、gender、impact_point_minor_other湊出)
-            conn.execute(ddl_text)
-            print("Table 'fact_accident_human' created successfully.")
+                                    ) CHARSET=utf8mb4 COMMENT='車禍案件用路人行為事實表';
+                            """,
+}
 
-    except Exception as e:
-        print(f"An error occurred while creating the table: {e}")
-        raise AirflowException
-    finally:
-        engine.dispose()
+
+def create_traffic_accident_tables(engine: Engine) -> None:
+    """建立交通事故星狀綱要的 4 張維度表與 3 張事實表，已存在的表會略過。
+
+    Args:
+        engine (Engine): 已指定資料庫的 SQLAlchemy Engine。
+
+    Raises:
+        SQLAlchemyError: 任一張表的 DDL 執行失敗，事務復原後往外拋。
+    """
+    create_tables(engine, TRAFFIC_ACCIDENT_TABLES)

@@ -2,8 +2,9 @@ name: Deploy-to-GCP-VM-practice-cicd-tjr104  # 機器人的名字
 
 on:
   push:
-    branches: 
+    branches:
       - main # 當代碼推送到main時觸發
+      - refactor/util-connection-layer
     paths-ignore:      # 忽略以下路徑的變動
       - '**.md'        # 所有 Markdown 文件
       - 'docs/**'      # docs 資料夾
@@ -11,7 +12,10 @@ on:
 jobs:
   deploy: # 將這一個job名稱命名為deploy
     runs-on: ubuntu-latest # 機器人跑在 GitHub 提供的 Linux 虛擬機上
-    
+    permissions:
+      contents: read
+      id-token: write
+
     # 描述deploy job由哪些task組成
     steps:
       - name: Checkout Code
@@ -29,7 +33,8 @@ jobs:
       - name: Google Auth
         uses: 'google-github-actions/auth@v2'
         with:
-          credentials_json: '${{ secrets.GCP_SA_JSONKEY }}'
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # 步驟 4: 設定 gcloud SDK
       - name: 'Set up Cloud SDK'
@@ -46,8 +51,8 @@ jobs:
             --ssh-key-file=~/.ssh/id_rsa \
             --quiet \
             --command="
-              cd /home/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents &&
-              
+              cd ~/${{ secrets.GCP_SSH_USER }}/taiwan_traffic_accidents_CICD_practice &&
+
               echo 'MYSQL_HOST=${{ secrets.MYSQL_HOST }}' > .env &&
               echo 'MYSQL_PORT=${{ secrets.MYSQL_PORT }}' >> .env &&
               echo 'MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}' >> .env &&
@@ -63,8 +68,10 @@ jobs:
               echo 'AIRFLOW_ADMIN_USER=${{ secrets.AIRFLOW_ADMIN_USER }}' >> .env &&
               echo 'AIRFLOW_ADMIN_PASSWORD=${{ secrets.AIRFLOW_ADMIN_PASSWORD }}' >> .env &&
               echo 'AIRFLOW_ADMIN_EMAIL=${{ secrets.AIRFLOW_ADMIN_EMAIL }}' >> .env &&
-              
-              git pull origin main &&
-              
+
+              export GIT_SSH_COMMAND='ssh -i ~/.ssh/for_git_clone -o IdentitiesOnly=yes' &&
+
+              git pull origin refactor/util-connection-layer &&
+
               docker compose up -d --build
             "

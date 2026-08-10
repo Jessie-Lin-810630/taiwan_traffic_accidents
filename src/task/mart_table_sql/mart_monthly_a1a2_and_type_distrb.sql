@@ -11,7 +11,7 @@ CREATE OR REPLACE VIEW v1_accident_main_day AS
 
 -- 2.再串連案件的category(A1/A2)與accident_type_major，因此取用type表，建成view表
 CREATE OR REPLACE VIEW v2_accident_main_day_type AS
-	(SELECT v1.*, d.accident_category, 
+	(SELECT v1.*, d.accident_category,
 			d.accident_type_major
 		FROM v1_accident_main_day v1
 			JOIN dim_accident_type d
@@ -19,8 +19,8 @@ CREATE OR REPLACE VIEW v2_accident_main_day_type AS
 
 -- 3-1. 先建立月度基礎統計 A1/A2比例(不管是否涉及行人)，建成view表
 CREATE OR REPLACE VIEW v3_accident_monthly_counts AS
-	(SELECT accident_year, accident_quarter, 
-	   accident_month, accident_category, 
+	(SELECT accident_year, accident_quarter,
+	   accident_month, accident_category,
        count(*) AS accident_counts,
        100 * count(*) / sum(count(*)) OVER ( PARTITION BY
 										accident_year, accident_quarter, accident_month
@@ -31,7 +31,7 @@ CREATE OR REPLACE VIEW v3_accident_monthly_counts AS
 -- 3-2. 可再建立單一年度下，逐月累計事故案件數量，轉建成Mart表
 DROP TABLE IF EXISTS mart_montly_a1a2_distrb;
 CREATE TABLE IF NOT EXISTS mart_montly_a1a2_distrb AS
-	(SELECT 
+	(SELECT
 			accident_year,
 			accident_quarter,
 			accident_month,
@@ -58,18 +58,18 @@ CREATE OR REPLACE VIEW v4_accident_main_day_type_grouped AS
 
 -- 4-2. 先建立月度基礎統計 各種accident_type_major，建成view表
 CREATE OR REPLACE VIEW v5_accident_main_day_type_grouped_counts AS
-	(SELECT accident_year, accident_quarter, 
+	(SELECT accident_year, accident_quarter,
 	   accident_month, accident_category, accident_type_major_grouped,
        count(*) AS accident_counts,
        100 * count(*) / sum(count(*)) OVER ( PARTITION BY accident_year,
 														  accident_quarter,
 														  accident_month
-											 ORDER BY accident_year,  
+											 ORDER BY accident_year,
 													  accident_month
 										   ) AS `counts_ratio_in_month`
 	FROM v4_accident_main_day_type_grouped
-		GROUP BY accident_year, accident_quarter, accident_month, accident_category, 
-        accident_type_major_grouped); 
+		GROUP BY accident_year, accident_quarter, accident_month, accident_category,
+        accident_type_major_grouped);
 
 -- 4.3 可再建立單一年度下，逐月累計事故案件數量，轉建成Mart表
 CREATE PROCEDURE swap_analysis_table()
@@ -77,7 +77,7 @@ BEGIN
 	DECLARE table_exists INT DEFAULT 0;
 
 	CREATE TABLE IF NOT EXISTS mart_montly_accident_type_distrb_tmp AS
-		(SELECT 
+		(SELECT
 				accident_year,
 				accident_quarter,
 				accident_month,
@@ -85,8 +85,8 @@ BEGIN
 				accident_category,
 				accident_type_major_grouped,
 				SUM(accident_counts) OVER (
-					PARTITION BY accident_year, 
-								accident_category, 
+					PARTITION BY accident_year,
+								accident_category,
 								accident_type_major_grouped
 					ORDER BY accident_month
 				) AS running_counts_monthly
@@ -112,11 +112,10 @@ END;
 CALL swap_analysis_table();
 DROP TABLE IF EXISTS mart_montly_accident_type_distrb_deprecated;
 
-DROP VIEW IF EXISTS v1_accident_main_day, 
-					v2_accident_main_day_type, 
-					v3_accident_monthly_counts, 
+DROP VIEW IF EXISTS v1_accident_main_day,
+					v2_accident_main_day_type,
+					v3_accident_monthly_counts,
 					v4_accident_main_day_type_grouped,
 					v5_accident_main_day_type_grouped_counts;
 
 DROP PROCEDURE IF EXISTS swap_analysis_table;
-

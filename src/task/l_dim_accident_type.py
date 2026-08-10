@@ -1,47 +1,29 @@
+"""Load 階段：將事故類別維度資料 upsert 進 `dim_accident_type`。"""
+
 import pandas as pd
-from sqlalchemy import text
-from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql
-from airflow.models import Variable
-from airflow.exceptions import AirflowException
+
+from src.util.mysql_utils import upsert_to_table
 
 
-def l_dim_accident_type(df_dim_accident_type: pd.DataFrame,
-                        database: str | None = None) -> None:
+def l_dim_accident_type(
+    df_dim_accident_type: pd.DataFrame, database: str | None = None
+) -> None:
+    """把事故類別維度資料寫入 `dim_accident_type`，唯一鍵重複時改為更新。
+
+    唯一鍵是事故級別、位置大小類與型態大小類五欄的組合，衝突時更新
+    `accident_category`，因此同一份資料重跑不會產生重複列。
+
+    Args:
+        df_dim_accident_type (pandas.DataFrame): 待寫入的資料，欄位名須與資料表一致，
+            即 `t_dim_accident_type()` 的產出。
+        database (str | None): 目標資料庫名稱。
+
+    Raises:
+        pymysql.MySQLError: 寫入失敗，事務復原後原樣往外拋。
     """
-    """
-    # 準備INSERT資料表時需要的SQL語句，採用UPSERT
-    # 先準備INSERT部分
-    columns = ', '.join(df_dim_accident_type.columns)
-    placeholders = ', '.join(['%s'] * len(df_dim_accident_type.columns))
-
-    # 準備UPDATE的部分：故意只更新accident_category。
-    update_part = "accident_category=VALUES(accident_category)"
-
-    # 組合出完整SQL語句
-    dml_str = f"""INSERT INTO dim_accident_type ({columns})
-                  VALUES ({placeholders})
-                  ON DUPLICATE KEY UPDATE {update_part};
-                """
-
-    # 6. 寫入資料表
-    print(f"====Inserting into table `dim_accident_type`....====")
-    conn = None
-    cursor = None
-    try:
-        conn = get_pymysql_conn_to_mysql(database)
-        if conn:
-            cursor = conn.cursor()
-            cursor.executemany(dml_str, df_dim_accident_type.values.tolist())
-            conn.commit()
-    except Exception as e:
-        print(f"Error on inserting into table, Error msg: {e}")
-        if conn:
-            conn.rollback()
-        raise AirflowException
-    else:
-        print(f"====Successfully inserting into table `dim_accident_type`====")
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
-    return None
+    upsert_to_table(
+        df_dim_accident_type,
+        table="dim_accident_type",
+        update_columns=["accident_category"],
+        database=database,
+    )

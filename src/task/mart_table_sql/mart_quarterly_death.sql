@@ -2,8 +2,8 @@
 -- 1. 將車禍大類別分得更乾淨
 CREATE OR REPLACE VIEW v1_dim_accident_type AS
 	(SELECT
-		accident_type_id, 
-        accident_type_major, 
+		accident_type_id,
+        accident_type_major,
 		CASE
 			WHEN accident_type_major = '人與汽(機)車' THEN '人與車'
 			WHEN accident_type_major = '人與汽機車' THEN '人與車'
@@ -11,14 +11,14 @@ CREATE OR REPLACE VIEW v1_dim_accident_type AS
 			ELSE accident_type_major
 		END AS accident_type_major_grouped
 			FROM dim_accident_type);
-            
+
 -- 2. 由於需要車禍日期、死傷人數，所以取用main與day表
 CREATE OR REPLACE VIEW  v2_typegroup_main_day AS
 	(SELECT v1.accident_type_major_grouped,
 			YEAR(d.accident_date) AS accident_year,
 			QUARTER(d.accident_date) AS accident_quarter,
 			m.accident_time,
-			m.death_count, 
+			m.death_count,
             m.injury_count
 		FROM fact_accident_main m -- 大表JOIN小表
 			JOIN v1_dim_accident_type v1
@@ -52,7 +52,7 @@ BEGIN
     IF table_exists > 0 THEN
 
         -- 如果存在做table swap
-        RENAME TABLE 
+        RENAME TABLE
             mart_quarterly_death TO mart_quarterly_death_deprecated,
             mart_quarterly_death_tmp TO mart_quarterly_death;
 
@@ -61,7 +61,7 @@ BEGIN
 
     ELSE
         -- 如果不存在直接rename tmp表為正式表
-        RENAME TABLE 
+        RENAME TABLE
             mart_quarterly_death_tmp TO mart_quarterly_death;
     END IF;
 END;

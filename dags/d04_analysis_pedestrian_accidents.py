@@ -1,18 +1,26 @@
-from datetime import timedelta, datetime, timezone
-from airflow.sdk import dag, task, TaskGroup
+"""DAG d04：依序執行 mart 層 SQL，重建行人事故分析用的資料表。
+
+每月 15 日 13 點跑一次。mart 層資料表是前端各頁面的資料來源，因此本 DAG 要排在
+事故資料載入完成之後。SQL 腳本放在 `src/task/mart_table_sql/`，一個檔案含多條
+敘述、整份一次執行，任一檔失敗則整批復原。
+"""
+
 import os
-from pathlib import Path
-from airflow.models import Variable
-from airflow.exceptions import AirflowException
-from src.util.create_db_engine_or_database import get_pymysql_conn_to_mysql_multistatement
-from sqlalchemy import text
+from datetime import datetime, timedelta, timezone
+
+from airflow.sdk import dag, task
+
+from src.task.exec_mart_sql import exec_mart_sql_files, find_sql_files
+from src.util.paths import MART_SQL_DIR
 
 # Default arguments for the DAG
 default_args = {
     "owner": "jessie",  # DAG 擁有者名稱
     "depends_on_past": False,  # 任務是否依賴前一次DAG執行結果（False=獨立執行）
     "retries": 2,  # dag run失敗時最多重試2次，總計允許執行3次
-    "retry_delay": timedelta(minutes=10),  # 除非task自己有額外定義，否則task重試需間隔10分鐘
+    "retry_delay": timedelta(
+        minutes=10
+    ),  # 除非task自己有額外定義，否則task重試需間隔10分鐘
 }
 
 
@@ -21,82 +29,48 @@ default_args = {
     default_args=default_args,
     description="Analysis works and refresh the Mart tables in MySQL database",
     schedule="00 13 15 * *",  # 每月15日的13點00分執行一次
-    start_date=datetime(2026, 4, 4, 17, 00,
-                        tzinfo=timezone(offset=timedelta(hours=8))),
+    start_date=datetime(2026, 4, 4, 17, 00, tzinfo=timezone(offset=timedelta(hours=8))),
     catchup=False,
-    tags=['traffic', 'mart', 'taskflow'],
+    tags=["traffic", "mart", "taskflow"],
 )
 def analysis_pedestrian_accidents():
+    """串接兩個 task：先找出 mart 層 SQL 檔案，再依序執行。"""
+
     @task
-    def find_sql_files(sql_files_dir: str | Path) -> list[str]:
-        if isinstance(sql_files_dir, str):
-            sql_files_dir = Path(sql_files_dir)
+    def task_find_sql_files(sql_files_dir):
+        """遞迴蒐集目錄底下所有 `.sql` 檔案的路徑。
 
-        sql_file_paths = [str(f) for f in sql_files_dir.rglob("*.sql")]
-        if not sql_file_paths:
-            raise AirflowException(f".sql files not found in the directory {sql_files_dir}!")
-        return sql_file_paths
+        Args:
+            sql_files_dir (str | Path): mart 層 SQL 腳本目錄。
 
-    def exec_sql_linebyline(sql_str: str, database: str) -> None:
-        try:
-            conn = get_pymysql_conn_to_mysql_multistatement(database)
-            cursor = conn.cursor()
-            print(f"type of sql_str: {type(sql_str)}")
-            cursor.execute(sql_str)
-        except Exception as line_error:
-            if conn:
-                conn.rollback()
-            raise AirflowException(f"SQL執行失敗: {line_error}")
-        else:
-            print("Mart層資料表建立成功!")
-        finally:
-            cursor.close()
-            conn.close()
-            return None
+        Returns:
+            list[str]: 找到的 `.sql` 檔案路徑，交由下游 task 執行。
 
-    @task()
-    def read_sql(sql_file_paths: list[str]) -> list[str]:
-        database = os.getenv("MYSQL_DATABASE")
-        conn = get_pymysql_conn_to_mysql_multistatement(database)
-        cursor = conn.cursor()
-        try:
-            for i in range(len(sql_file_paths)):
-                file_path = sql_file_paths[i]
-                print(f"正在處理第{i + 1}份: {os.path.basename(file_path)}")
-                with open(file_path, mode="r") as f:
-                    sql_content = f.read()
-                cursor.execute(sql_content)
+        Raises:
+            FileNotFoundError: 目錄底下沒有任何 `.sql` 檔案。
+        """
+        return find_sql_files(sql_files_dir)
 
-                # 有可能資料庫可能還沒真正完成報錯，但Python認為已經跑完了而提前印出"建立成功"。
-                # 這裡要強制用python檢查所有result sets都有消耗掉，才可以離開while loop進入下一行。
-                while conn.next_result():
-                    pass
-                print("Mart層資料表建立成功!")
-                # # 使用 sqlparse 移除註解並格式化
-                # clean_sql = sqlparse.format(sql_content, strip_comments=True)
+    @task
+    def task_exec_mart_sql_files(sql_file_paths, database):
+        """依序執行所有 mart 層 SQL 檔案，全數成功後才一次提交。
 
-                # # 分割成語句列表（sqlparse會自動處理分號）
-                # list_of_sql_statements = sqlparse.split(clean_sql)
+        Args:
+            sql_file_paths (list[str]): 要執行的 `.sql` 檔案路徑。
+            database (str): 目標資料庫名稱。
 
-                # # 移除空語句
-                # list_of_sql_statements = [stmt.strip() for stmt in list_of_sql_statements
-                #                           if stmt.strip()]
-                # print(f"去除註解後、清理SQL語句數量: {len(list_of_sql_statements)}")
+        Returns:
+            None: 本 task 只有副作用。
 
-                # # 開始執行
-                # exec_sql_linebyline(list_of_sql_statements)
-            print("全數sql file解析且執行完成!")
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            raise AirflowException(f"處理第{i + 1}份sql file失敗, Error {e}")
-        finally:
-            cursor.close()
-            conn.close()
+        Raises:
+            pymysql.MySQLError: 任一檔案執行失敗，整批事務復原後往外拋。
+        """
+        exec_mart_sql_files(sql_file_paths, database)
         return None
 
-    sql_file_path_lst = find_sql_files(Path().resolve()/"src/task/mart_table_sql")
-    mart_done = read_sql(sql_file_path_lst)
+    database = os.getenv("MYSQL_DATABASE")
+    sql_file_path_lst = task_find_sql_files(MART_SQL_DIR)
+    task_exec_mart_sql_files(sql_file_path_lst, database)
 
 
 analysis_pedestrian_accidents()

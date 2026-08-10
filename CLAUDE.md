@@ -1,119 +1,172 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+給 Claude Code（claude.ai/code）看的專案指引。
+
+**這份檔案只寫「該遵守什麼」與「去哪裡看為什麼」，不複述論證。**
+決策的完整脈絡在 `docs/adr/`：決策文是 `000N-<決策>.md`，執行報告是
+`000N-執行摘要-<主題>.md`。領域術語表在 `CONTEXT.md`。
 
 ## 專案概述
 
-臺灣交通事故 ETL + Streamlit 視覺化專案。後端（MySQL / Redis / Airflow）跑在 GCP VM 的 Docker Compose 上，前端 Streamlit 以獨立 image 部署到 Cloud Run，透過 VPC Connector 連回 VM 內網存取 MySQL 與 Redis。
+臺灣交通事故的 ETL + Streamlit 視覺化。後端（MySQL / Redis / Airflow）跑在 GCP VM
+的 Docker Compose 上；前端 Streamlit 以獨立 image 部署到 Cloud Run，透過 direct VPC
+egress 連回 VM 內網存取 MySQL 與 Redis。
 
-README.md 描述的是「分支即里程碑」的開發流程（`feature/etl-app` → `feature/docker-integration` → `develop/CI` → `UAT` → `main`）。目前 `main` 是集大成的生產分支。
+資料模型是星狀綱要，五張事實表配四張維度表，中英欄位對照集中在
+`src/util/table_column_map.py`。
 
 ## 常用指令
 
-專案根目錄必須是所有指令的執行位置（模組以 `src.xxx` 絕對匯入，靠 CWD 或 `PYTHONPATH` 解析）。
+**所有指令都要在專案根目錄執行** —— 模組以 `src.xxx` 絕對匯入，靠 CWD 或
+`PYTHONPATH` 解析。
 
 ```bash
-# 安裝依賴（Poetry 是開發端的真實來源；requirements.txt 是 poetry export 的產物，只給容器用）
-poetry env use $(which python3.12)
-poetry install
-
-# 依賴變動後必須重新匯出，否則兩個 Dockerfile 裝到的版本會與本機不一致
-poetry export -f requirements.txt --output requirements.txt --without-hashes
-
-# 單獨執行某個 ETL 任務（不經 Airflow）
-poetry run python -m src.task.e_crawling_traffic_accident
-poetry run python -m src.task.l_fact_accident_main
-
-# 啟動前端
-poetry run streamlit run src/app.py
-
-# 測試（pytest 無設定檔，直接指定路徑）
-poetry run pytest test/
-poetry run pytest test/unit_test/test_task_t_fact_accident_main.py::test_xxx
-
-# 後端整套服務（MySQL + Redis + Airflow scheduler/triggerer/api-server）
-docker compose up -d --build     # 需要根目錄有 .env
-docker compose logs -f airflow-scheduler
+poetry install                                    # Poetry 是開發端的真實來源
+poetry run python -m src.task.e_crawling_traffic_accident   # 單獨跑一個 ETL 任務
+poetry run streamlit run src/app.py               # 啟動前端
+poetry run pytest test/unit_test/                 # 測試（無設定檔，要指定路徑）
+docker compose up -d --build                      # 後端整套（需要根目錄有 .env）
 ```
 
-Airflow UI：`http://<host>:8081`（容器內 8080 對外 8081）。
+依賴變動後必須重新匯出，否則容器裝到的版本會與本機不一致：
+
+```bash
+poetry export -f requirements.txt --output requirements.txt --without-hashes
+```
+
+Airflow UI 在 `http://<host>:8081`。
 
 ## 架構要點
 
-### ETL 命名慣例：`e_` / `t_` / `l_`
+### ETL：`e_` / `t_` / `l_`
 
-`src/task/` 下每個檔案是一個 ETL 階段的純函式，檔名前綴即階段：
+`src/task/` 下每個檔案是一個 ETL 階段的純函式，檔名前綴即階段 ——
+`e_` 抓取（回傳檔案路徑 list）、`t_` 清洗（回傳 DataFrame）、`l_` 載入（寫 MySQL）。
+另有無前綴的工具型 task（建表、執行 mart SQL）。
 
-- `e_*.py` — 爬取 data.gov.tw / Google Maps API，回傳**檔案路徑 list**
-- `t_*.py` — 讀 CSV → 清洗 → 回傳 **DataFrame**
-- `l_*.py` — 接 DataFrame → 手組 `INSERT ... ON DUPLICATE KEY UPDATE` → `executemany` upsert 進 MySQL，回傳 `None`
+`dags/dNN_*.py` 只負責串接。**改 ETL 邏輯改 `src/task/`，改排程與相依改 `dags/`。**
 
-DAG 只負責串接：`dags/dNN_*.py` 把上述函式包進 `@task`，用 `pathlist` / DataFrame 在 task 間傳遞。所以**改 ETL 邏輯改 `src/task/`，改排程與相依改 `dags/`**。
+三條規矩：
 
-資料模型是星狀綱要：`fact_accident_main` / `fact_accident_env` / `fact_accident_human` / `fact_night_markets` 搭配 `dim_accident_day` / `dim_accident_type` / `dim_road_design` / `dim_lane_design`。欄位中→英的對照集中在 `src/util/table_column_map.py`。
+- 讀事故 CSV 一律走 `read_traffic_accident_file()`，不要自己 `pd.read_csv`（ADR-0010）
+- CSV 缺欄是資料來源的正常演進，記 `warning` 並繼續；**空 `pathlist` 相反，一律拋出**（ADR-0003）
+- 事實表的載入以檔案批次為單位，避免 VM 上 OOM（ADR-0015）
 
-### 前端資料鏈
+### 天氣 ETL
 
-`src/app.py`（首頁）→ `src/pages/v_*.py`（各分頁）→ `src/task/core/`：
+OpenMeteo → GCS Parquet → MySQL。與其他 pipeline 的差別是**有外部額度限制**，
+且 **GCS 的路徑就是抓取進度表**（ADR-0013）。經緯度兩側都要走同一支網格函式
+（ADR-0012）—— 只要一側算法不同，merge 會一列都對不上且不報錯。
 
-- `c_data_service.py` — 業務運算層（夜市周邊事故、haversine、熱區抽樣），也是 `d06_precompute_to_redis` DAG 呼叫的對象
-- `c_db.py` — 純 SQL 查詢層
-- `c_ui.py` — 共用 UI 元件（側邊欄等）
+`d07` 定期跑，`d08` 是一次性回補、補完後手動 pause。
 
-重運算走「DAG 預先算好 → pickle 進 Redis（TTL 10 天）→ 前端 `get_cache` 讀」的模式，前端不做重運算。`src/task/mart_table_sql/*.sql` 是 mart 層純 SQL，由 `d04_analysis_pedestrian_accidents` 以 multistatement 連線執行。
+### 前端
 
-### 雙環境 logger
+`src/app.py` → `src/pages/v_*.py` → `src/task/core/`（`c_data_service` 業務運算、
+`c_db` 純查詢、`c_ui` 共用元件）。
 
-`src/util/logger_crtx.py` 的 `create_logging_logger()` 會自動偵測是否在 Airflow 環境，回傳 `(logger, is_airflow_env, AirflowException)`。地端時 `AirflowException` 是假的 stub 類別，因此 util 模組可在無 Airflow 的環境（如 Cloud Run 的 Streamlit 容器）被匯入。新增 util 模組時沿用這個 pattern：
+- **重運算由 DAG 預先算好進 Redis，前端只讀** —— 前端不做重運算
+- **查詢的粒度要與使用它的粒度一致**（ADR-0009）：批次服務就整批一次查詢，
+  迴圈裡不得再出現查詢
+- **減量要在 SQL 完成，不是撈回來再用 pandas 篩**（ADR-0016）
+- 座標一律走 bind parameter，不 f-string 內插
+
+### logger 與例外處理
 
 ```python
-logger, is_airflow_env = create_logging_logger()
-if is_airflow_env:
-    from airflow.exceptions import AirflowException
+from src.util.logger_crtx import get_logger
+logger = get_logger(__name__)
 ```
 
-注意 `src/task/` 底下多數 `t_*.py` / `l_*.py` 是直接 `from airflow.exceptions import AirflowException`，這些只在 Airflow 容器內執行，不會被前端匯入。
+五條規則，各有 ADR 背書，**在 `src/` 與 `dags/` 內皆已無例外**（由 AST 稽核把關）：
 
-### 進行中的 util 重構（重要）
+1. 不轉換成 `AirflowException`，一律原樣 `raise`（ADR-0001）
+2. 不把故障吞成「正常但空」的回傳值（ADR-0003）
+3. `exc_info=True` 只用在例外停止傳播之處 —— 有 `raise` 就不帶（ADR-0003）
+4. `finally` 只負責釋放資源，裡面不放 `return`（ADR-0005）
+5. 會被重試的失敗記 `warning`，不會被重試的記 `error`（ADR-0006）
 
-`src/util/` 目前有兩套並存的連線工具：
+`src/util/` 與 `src/task/` 全部模組**都能在無 Airflow 的環境被匯入**（地端、pytest、
+Cloud Run），由測試把關。`dags/` 底下照常 import airflow。
 
-- **實際被使用的**：`create_db_engine_or_database.py`、`get_or_set_cache_from_redis.py`、`crawling_utils.py` 以外的舊檔
-- **未追蹤、尚未被任何檔案 import 的新版**：`mysql_utils.py`、`redis_utils.py`、`crawling_utils.py`、`logger_crtx.py`
+### 共用工具（`src/util/`）
 
-新版加上了 loguru/logger context、連線池單例、`upsert_to_table()` 等抽象。修改連線邏輯前先用 grep 確認要動的是哪一套，別假設新版已生效。
+七支模組各有明確職責、有測試把關：MySQL 存取、Redis、GCS、通用抓取能力、路徑、
+事故 CSV 讀取契約、logger。
 
-## 環境變數
+- **MySQL 取連線一律用 `get_engine_to_mysql()`，不要自己 `create_engine()`，
+  也不要 `dispose()` 它**（ADR-0004）
+- **抓取層只放「換一個資料來源仍然成立」的東西**，站台專屬的解析規則屬於
+  `src/task/e_*.py`（ADR-0006）
+- **路徑一律從 `src.util.paths` 取，不要用 `Path().resolve()`**（ADR-0007）
+- 共用工具保持單一語意：事務邊界、切批是呼叫端的業務決定，不做進 `src/util/`
 
-`.env`（gitignore）供 docker compose 使用；`.env.example` 是範本。實際部署時由 GitHub Secrets 注入：backend workflow 在 VM 上 `echo` 生成 `.env`，Cloud Run workflow 用 `--set-env-vars` 傳入。
+### 環境變數
 
-關鍵變數：`MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE/MYSQL_ROOT_PASSWORD`、`MYSQL_AIRFLOW_DATABASE`（Airflow metadata DB 與業務 DB 分開）、`REDIS_HOST/REDIS_PORT/REDIS_PASSWORD`、`GOOGLE_MAP_API_KEY`、`AIRFLOW_SECRET_KEY`、`AIRFLOW_ADMIN_USER`、`AIRFLOW_ADMIN_PASSWORD`、`AIRFLOW_ADMIN_EMAIL`。
+`.env`（gitignore）供 docker compose 使用，`.env.example` 是範本。
+部署時由 GitHub Secrets 注入。
 
-Cloud Run 上 `MYSQL_HOST` / `REDIS_HOST` 是 VM 的**內網 IP**（寫死在 workflow 中），改 VM 會需要同步改 `.github/workflows/deploy-cloud-run.yml`。
+共 15 個，分成互不重疊的兩群：**Python 讀取的 9 個**（MySQL / Redis 連線資訊與
+API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模組層）與
+**只有 docker compose 用的 6 個**（Airflow 啟動與自己的 metadata database）。
+後者 Python 從不讀取，但**不可刪除** —— 「Python 不讀取」與「可以刪除」是兩件事。
 
-## CI/CD
+其中四個必填項缺少時會在使用的那一刻拋出（ADR-0008）。GCS 不使用環境變數，
+走 Application Default Credentials。
 
-推 `main` 會同時觸發兩條 workflow（`**.md` 與 `docs/**` 變動會被忽略）：
+### CI/CD
 
-- `deploy-backend-vm.yml` — 經 IAP tunnel SSH 進 VM → 生成 `.env` → `git pull` → `docker compose up -d --build`
-- `deploy-cloud-run.yml` — build `docker/Dockerfile.streamlit` → push Artifact Registry → `gcloud run deploy`
+推 `main` 會觸發兩條 workflow（`**.md` 與 `docs/**` 的變動會被忽略）：
 
-沒有 CI 測試 gate；測試需在本機自行跑過。
+- `deploy-backend-vm.yml` —— 經 IAP tunnel SSH 進 VM，重建 compose
+- `deploy-cloud-run.yml` —— build image 推 Artifact Registry，`gcloud run deploy`
 
-## Agent 工具設定
+沒有 CI 測試 gate，測試需在本機自行跑過。Cloud Run 上的 `MYSQL_HOST` / `REDIS_HOST`
+是 VM 的內網 IP，改 VM 要同步改 workflow。
 
-Skill 檔案的實體放在 `.agents/skills/`（**納入版控**），`.claude/skills/` 只是 symlink 且 `.claude` 已被 gitignore。所以新增 skill 後要確認 `.agents/` 有進 commit，別只看 `.claude/`。
+## 決策索引
 
-- 以 `npx skills add <repo> -s <name> -y` 安裝；多個 skill 要重複 `-s`，逗號分隔會被判定為找不到而退回列出清單
-- `skills-lock.json` 記錄來源，可用 `npx skills experimental_install` 還原
-- 已裝的重構分析工具鏈：`improve-codebase-architecture`（入口，`disable-model-invocation: true`，只能由使用者輸入 `/` 觸發）→ 依賴 `codebase-design`、`grilling`、`domain-modeling`；決策定案後接 `request-refactor-plan`
-- 這些 skill 預期讀 `CONTEXT.md`（領域術語表）與 `docs/adr/`（架構決策記錄），本 repo 目前兩者皆無，會在流程中按需建立
-- `openspec/` 是另一套獨立的規格工作流（`.claude/commands/opsx*`），與上述 skill 無關
+| ADR | 主題 |
+| --- | --- |
+| 0001 | 不使用 `AirflowException`，一律原樣拋出 |
+| 0002 | upsert 邏輯集中於單一 module |
+| 0003 | 快取層不再吞噬例外 |
+| 0004 | MySQL Engine 以資料庫名為鍵的單例快取 |
+| 0005 | `finally` 只負責釋放資源 |
+| 0006 | 抓取層區分暫時性與永久性故障 |
+| 0007 | 路徑以專案根為基準而非工作目錄 |
+| 0008 | 必填設定在使用時驗證 |
+| 0009 | 預計算的查詢粒度以批次為單位 |
+| 0010 | 事故 CSV 的讀取契約集中於單一 module |
+| 0011 | 天氣 ETL 併入既有存取介面 |
+| 0012 | 氣象網格精度 |
+| 0013 | 天氣抓取的斷點以觀測點乘月為單位 |
+| 0014 | 事故主鍵由事故內容決定，而非單次 run 的排序名次 |
+| 0015 | 事故事實表的載入以檔案批次為單位 |
+| 0016 | 熱點圖的減量在 SQL 完成，而非 pandas |
 
 ## 已知狀態
 
-- `test/unit_test/` 的測試原始碼目前不在工作區（僅剩 `__pycache__`），從 pyc 檔名可看出原本每個 `src/task/*.py` 都有對應的 `test_task_*.py`。新增測試時沿用該命名。
-- `src/app.py` 的按鈕指向多個尚未建立的頁面（`v_act1_city_accident.py`、`v_policy_impact.py`、`v_act3_avoid.py`、`v_act6_chat.py` 等），`src/pages/` 目前只有 `v_act1_all_accident.py`，點擊會報錯。
-- `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分。
-- `pyproject.toml` 的 `[tool.poetry] packages = [{include = "src"}]` 是讓 `src.xxx` 絕對匯入能運作的關鍵；容器內則改由 compose 設定的 `PYTHONPATH=/opt/airflow/`（Airflow）與 `PYTHONPATH=/app`（Cloud Run）達成同樣效果。
-- `pyproject.toml` 的依賴清單與 `requirements.txt` 不會自動同步，兩者皆納入版控，改依賴時要一起更新。
+- **前端已上線 Cloud Run**（dev 環境），首頁 OOM 已修復（ADR-0016），
+  記憶體設定仍在觀察期
+- **天氣 ETL 已實作、待驗收** —— `fact_hourly_weather` 目前是空的，
+  `t_`/`l_` 兩支至今未在真實資料上跑過（ADR-0013 執行摘要）
+- **`get_accident_hotspots()` 尚無呼叫者**，新查詢未在真實資料上驗證過
+  （ADR-0016 執行摘要第四章）
+- `test/unit_test/` 現有 **213 個測試**。命名慣例：測 `src/task/*.py` 用
+  `test_task_*.py`、測 `src/util/*.py` 用 `test_util_*.py`；測試函式名用中文，
+  docstring 寫出「釘住的是哪個決策」。`c_db.py` 與 `c_data_service.py` 尚無覆蓋
+- ETL 產出落在 `data/raw` 與 `data/processed`（皆在 `.gitignore` 內，compose 有掛載）
+- `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分
+- `pyproject.toml` 與 `requirements.txt` 不會自動同步，改依賴時要一起更新
+
+## Agent 工具設定
+
+Skill 實體放在 `.agents/skills/`（**納入版控**），`.claude/skills/` 只是 symlink 且
+`.claude` 已被 gitignore。新增 skill 後要確認 `.agents/` 有進 commit。
+
+重構分析工具鏈的入口是 `improve-codebase-architecture`（只能由使用者輸入 `/` 觸發）。
+**每個候選的產出是兩份文件**：決策文（動工前）與執行摘要（七章）。
+**下一輪的候選來自上一輪摘要的第五、七章**，這是流程能接續的關鍵。
+
+**ADR 生效後不再改動** —— 實作期的決定與偏離寫進執行摘要，不回頭改決策文。
