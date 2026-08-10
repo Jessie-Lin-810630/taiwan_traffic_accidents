@@ -162,10 +162,9 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
             |                                 (Scheduler + trigger + api-server(webserver))
             |                                 in backend GCP VM.
             |
-            ├── requirements.txt            # Defining package dependency when initiaing the containers.
-            |                                 This contents of this doc will be copied when initiating
-            |                                 containers by folloing the docker/Dockerfile.
-            └── learning_notes/             # My personnel learning notes from branch 1-4.
+            └── requirements.txt            # Defining package dependency when initiaing the containers.
+                                              This contents of this doc will be copied when initiating
+                                              containers by folloing the docker/Dockerfile.
     ```
 
 # How to reproduce the development environment?
@@ -194,4 +193,3 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
         # Execute the streamlit:
             poetry run streamlit run src/app.py
     ```
-3. If you want to know how the branch1 should proceed to branch2 and even sequentially to further branches. Welcome to read [my notes 1](./learning_notes/20260403_branch-etl-app_to_docker-integration.md), [notes 2](./learning_notes/20260406_branch_docker_to_developci.md) and [note 3](./learning_notes/20260407_branch_developci_to_uat.md).
