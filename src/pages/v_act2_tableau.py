@@ -118,24 +118,24 @@ def act5_render():
     # 透過 components.html 將產生的語法渲染在畫面上，scrolling=False 隱藏預設捲軸以求美觀
     with tab1:
         html1 = get_tableau_html(
-            "shared/KDW95K7ZR",
-            "https://public.tableau.com/static/images/KD/KDW95K7ZR/1.png",
+            "shared&#47;G4WQGYSTG",
+            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;G4&#47;G4WQGYSTG&#47;1.png",
         )
         components.html(html1, height=920, scrolling=False)
 
     with tab2:
-        html3 = get_tableau_html(
-            "shared/PFRYZGYMF",
-            "https://public.tableau.com/static/images/PF/PFRYZGYMF/1.png",
-        )
-        components.html(html3, height=920, scrolling=False)
-
-    with tab3:
         html2 = get_tableau_html(
-            "shared/JJ6HP2KN6",
-            "https://public.tableau.com/static/images/JJ/JJ6HP2KN6/1.png",
+            "shared&#47;56837R6KD",
+            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;56&#47;56837R6KD&#47;1.png",
         )
         components.html(html2, height=920, scrolling=False)
+
+    with tab3:
+        html3 = get_tableau_html(
+            "views&#47;tjr104_mart&#47;2?:language=zh-TW&amp;:embed=true&amp;:sid=&amp;:redirect=auth",
+            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;tj&#47;tjr104_mart&#47;2&#47;1.png",
+        )
+        components.html(html3, height=920, scrolling=False)
 
 
 def main():
