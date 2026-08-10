@@ -29,7 +29,7 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
             │   └── miscellaneous.py             # 放置一些想做版控、但現在暫時用不到的函式
             ├── .env                             # 本地環境變數(e.g, DB_HOST=localhost)，
             |                                      在github remote branch上會以.env.example示範
-            |                                 
+            |
             ├── pyproject.toml                   # Poetry 設定
             ├── poetry.lock                      # 精確版本鎖定
             └── .gitignore                       # 存放不需要trace的檔案、檔案類型
@@ -48,10 +48,10 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
             ├── dags/                       # + 存放Airflow DAGs
             ├── src/
             |   ├── pages/                  # (From Branch 1)
-            |   ├── tasks/                  # (From Branch 1)                
+            |   ├── tasks/                  # (From Branch 1)
             |   ├── util/                   # (From Branch 1)
-            │   └── app.py                  # (From Branch 1) 
-            ├── sandbox/                    # (From Branch 1) 
+            │   └── app.py                  # (From Branch 1)
+            ├── sandbox/                    # (From Branch 1)
             ├── .env                        # (Revised from Branch 1)容器化環境變數
             |                                 (e.g, DB_HOST=容器名稱)，在github remote branch上
             |                                 會以.env.example示範
@@ -76,10 +76,10 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
             │       └── deploy.yml          # + 測試在GCP VM上building container
             ├── dags/                       # (From Branch 2)
             ├── src/                        # (From Branch 2)
-            |   ├── pages/                  
-            |   ├── tasks/                                  
-            |   ├── util/                   
-            │   └── app.py                  
+            |   ├── pages/
+            |   ├── tasks/
+            |   ├── util/
+            │   └── app.py
             │
             ├── .env                        # (From Branch 2，在github remote branch上
             |                                  會以.env.example示範)
@@ -96,28 +96,28 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
 3. directories:
     ```
         my-project/
-            ├── .github/                    
+            ├── .github/
             │   └── workflows/
             │       ├── deploy-backend-vm.yml   # + Revised from Branch 3
             |       └── deploy-cloud-run.yml    # + 測試 VPC connector access
             |                                     與cloud run service可運行。
-            |                  
+            |
             ├── dags/                           # (From Branch 3)
             ├── src/                            # (From Branch 3)
-            |   ├── pages/                      
-            |   ├── tasks/                                  
-            |   ├── util/                   
-            │   └── app.py                  
+            |   ├── pages/
+            |   ├── tasks/
+            |   ├── util/
+            │   └── app.py
             │
-            ├── .env.example                # + Revised from Branch 3, environment variables in this 
-            |                                  example are truely managed by Github secret or 
+            ├── .env.example                # + Revised from Branch 3, environment variables in this
+            |                                  example are truely managed by Github secret or
             |                                  GCP secret manager rather than .env file
             |
             ├── .gitignore                  # (From Branch 3)
             ├── docker/                     # (From Branch 3)
             │   ├── Dockerfile.airflow
             │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # + Revised from Branch 3; Separate AirFlow standalone mode to 
+            ├── docker-compose.yml          # + Revised from Branch 3; Separate AirFlow standalone mode to
             |                                 three containers, Scheduler、Trigger、api-server(webserver)
             |
             └── requirements.txt            # (From Branch 3)
@@ -129,28 +129,28 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
     ```
         my-project/
             ├── README.md                       # Introduce the structure and user guide of this repository.
-            ├── .github/                    
+            ├── .github/
             │   └── workflows/
             │       ├── deploy-backend-vm.yml   # A CD workflow to deploying the backend computing services
-            |       |                             on a GCP VM. 
-            |       └── deploy-cloud-run.yml    # A CD workflow to deploying the frontend demonstation to 
+            |       |                             on a GCP VM.
+            |       └── deploy-cloud-run.yml    # A CD workflow to deploying the frontend demonstation to
             |                                     a GCP cloud run.
-            |                  
+            |
             ├── dags/                           # AirFlow DAGs scheduling ETL pipeline in backend VM.
-            ├── src/                            # All the required scripts & functions before orchestrated 
+            ├── src/                            # All the required scripts & functions before orchestrated
             |   |                                 to an organized ETL data pipeline by AirFlow
             |   |
             |   ├── pages/                      # Frontend web pages via python-streamlit
             |   ├── tasks/                      # Tasks constributing DAGs
-            |   ├── util/                       # Miscellaneous python functions without intact 
+            |   ├── util/                       # Miscellaneous python functions without intact
             |   |                                 business logics but repeatedly called by tasks/
             |   |
             │   └── app.py                      # Fronted home page via python-streamlit.
             |
             ├── .streamlit/                     # Configuration changes about streamlit.
             |
-            ├── .env.example                # Environment variables required to CD workflow and ETL 
-            |                                 datapipeline. In this example, they are truely managed by 
+            ├── .env.example                # Environment variables required to CD workflow and ETL
+            |                                 datapipeline. In this example, they are truely managed by
             |                                 Github secret or GCP secret manager rather than an .env file.
             |
             ├── .gitignore                  # Untracked file name/type during development.
@@ -158,12 +158,12 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
             ├── docker/                     # Recipes defining customized images of AirFlow & Streamlit
             │   ├── Dockerfile.airflow
             │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # Build and start MySQL, Redis and AirFlow containers 
-            |                                 (Scheduler + trigger + api-server(webserver)) 
+            ├── docker-compose.yml          # Build and start MySQL, Redis and AirFlow containers
+            |                                 (Scheduler + trigger + api-server(webserver))
             |                                 in backend GCP VM.
             |
             ├── requirements.txt            # Defining package dependency when initiaing the containers.
-            |                                 This contents of this doc will be copied when initiating 
+            |                                 This contents of this doc will be copied when initiating
             |                                 containers by folloing the docker/Dockerfile.
             └── learning_notes/             # My personnel learning notes from branch 1-4.
     ```
@@ -181,14 +181,14 @@ Based on the CI/CD concepts, the project is organized into five sequential branc
         # Execute pure python scripts for ETL:
             poetry run python -m src.tasks.e_crawling_...
             poetry run python -m src.tasks.l_.....
-        
+
         # Execute pure python scripts for frontend analysis:
             poetry run python -m src.cores.c_data_services
 
         # Execute the SQL srcipts to create the table of analysis results:
             You should have a MySQL server in your VM or local end first,
-            and connect to the server and execute the statements in 'mart_table_sql/analysis_overview_pedestrian_accidents.sql'. 
-            In the branch feature/etl-app, statements are usually saved in pure .sql file; However, when running, either by GUI (e.g. workbench) or sqlalchemy ORM is okay. 
+            and connect to the server and execute the statements in 'mart_table_sql/analysis_overview_pedestrian_accidents.sql'.
+            In the branch feature/etl-app, statements are usually saved in pure .sql file; However, when running, either by GUI (e.g. workbench) or sqlalchemy ORM is okay.
             These SQL statements will be integrated into a new DAG in the next branch so the sqlalchemey module will be introduced then.
 
         # Execute the streamlit:
