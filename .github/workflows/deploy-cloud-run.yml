@@ -126,7 +126,7 @@ jobs:
             --service-account tjr104-tw-traffic-web@${{secrets.GCP_PROJECT_ID}}.iam.gserviceaccount.com \
             --session-affinity \
             --timeout=3600 \
-            --memory=1Gi \
+            --memory=2Gi \
             --concurrency=4 \
             --set-secrets MYSQL_HOST=MYSQL_HOST:latest,REDIS_HOST=REDIS_HOST:latest,GROQ_API_KEY=GROQ_API_KEY:latest \
             --set-env-vars="^@^MYSQL_PORT=${{ secrets.MYSQL_PORT }}@MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}@MYSQL_USER=${{ secrets.MYSQL_USER }}@MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}@REDIS_PORT=${{ secrets.REDIS_PORT }}@REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}@PYTHONPATH=/app"
