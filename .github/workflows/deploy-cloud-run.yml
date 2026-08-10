@@ -4,65 +4,126 @@ on:
   push:
     branches:
       - main # 當代碼推送到main時觸發
+      - refactor/util-connection-layer
+    paths:
+      - 'docker/Dockerfile.streamlit'
+      - '.streamlit/**'
+      - 'src/pages/**'
+      - 'src/task/core/**'
+      - 'src/util/**'
+      - 'src/app.py'
+      - '.github/workflows/deploy-cloud-run.yml'
+      - 'requirements.txt'
     paths-ignore:      # 忽略以下路徑的變動
       - '**.md'        # 所有 Markdown 文件
       - 'docs/**'      # docs 資料夾
+
+env:
+  REGION: asia-east1
+  AR_REPO: tjr104-tw-traffic
+  SERVICE_NAME: tjr104-tw-traffic-app
 
 jobs:
   # Job 1: 打包 Docker Image 並推送到 Artifact Registry
   build-and-push:
     runs-on: ubuntu-latest
+    # Workload Identity Federation 靠 GitHub 簽發的 OIDC token 換 GCP 憑證，缺 id-token 會拿不到 token
+    permissions:
+      contents: read
+      id-token: write
+    # $GITHUB_ENV 只在同一個 job 內有效，要傳給 Job 2 必須走 job outputs
+    outputs:
+      env_name: ${{ steps.vars.outputs.env_name }}
+      image_tag: ${{ steps.vars.outputs.image_tag }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Resolve environment name, short SHA and image path
+        id: vars
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            ENV_NAME=prod
+          else
+            ENV_NAME=dev
+          fi
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${REGION}-docker.pkg.dev/${{secrets.GCP_PROJECT_ID}}/${AR_REPO}/${SERVICE_NAME}"
+
+          # 給本 job 後續 step 用
+          {
+            echo "ENV_NAME=${ENV_NAME}"
+            echo "SHORT_SHA=${SHORT_SHA}"
+            echo "IMAGE=${IMAGE}"
+          } >> "$GITHUB_ENV"
+
+          # 給 Job 2 用
+          {
+            echo "env_name=${ENV_NAME}"
+            echo "image_tag=${IMAGE}:${ENV_NAME}-${SHORT_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Google Auth
         uses: 'google-github-actions/auth@v2'
         with:
-          credentials_json: '${{ secrets.GCP_SA_JSONKEY }}'
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
 
+      # 將Google的SA餵給這台虛擬機裡的Docker，讓它在執行 docker push 時，知道要帶著SA權限去寫入 Artifact Registry。
       - name: Configure Docker for GCP
-        run: gcloud auth configure-docker asia-east1-docker.pkg.dev
-        # 將Google的SA餵給這台虛擬機裡的Docker，讓它在執行 docker push 時，知道要帶著SA權限去使用Artifact Registry。
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
 
-        # 建立標籤，指向Artifact Registry 倉庫
+        # 建立標籤，推送到 Artifact Registry 倉庫
       - name: Build and Push Image
         run: |
-          IMAGE_TAG="asia-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/traffic-web-service/streamlit-app:latest"
-          docker build -f docker/Dockerfile.streamlit -t $IMAGE_TAG .
-          docker push $IMAGE_TAG
+          docker build \
+            --platform=linux/amd64 \
+            -f docker/Dockerfile.streamlit \
+            -t "${IMAGE}:${SHORT_SHA}" \
+            -t "${IMAGE}:${ENV_NAME}-latest" \
+            -t "${IMAGE}:${ENV_NAME}-${SHORT_SHA}" \
+            .
+          docker push "${IMAGE}:${SHORT_SHA}"
+          docker push "${IMAGE}:${ENV_NAME}-latest"
+          docker push "${IMAGE}:${ENV_NAME}-${SHORT_SHA}"
 
   # Job 2: 部署到 Cloud Run 並連接 VPC Connector
   deploy-to-cloud-run:
     needs: build-and-push # 確保 Image 推送成功後才開始部署
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Google Auth
         uses: 'google-github-actions/auth@v2'
         with:
-          credentials_json: '${{ secrets.GCP_SA_JSONKEY }}'
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
 
-      - name: Deploy to Cloud Run
+      - name: Deploy to Cloud Run Service
+        env:
+          ENV_NAME: ${{ needs.build-and-push.outputs.env_name }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
-          gcloud run deploy streamlit-service \
-            --image="asia-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/traffic-web-service/streamlit-app:latest" \
-            --region=asia-east1 \
-            --platform=managed \
-            --vpc-connector=streamlit-vpc-connector \
+          gcloud run deploy "${SERVICE_NAME}-${ENV_NAME}" \
+            --image "${IMAGE_TAG}" \
+            --network=default \
+            --subnet=default \
+            --vpc-egress=private-ranges-only \
+            --region "${REGION}" \
+            --project "${{secrets.GCP_PROJECT_ID}}" \
             --allow-unauthenticated \
-            --set-env-vars="MYSQL_HOST=10.140.0.14" \
-            --set-env-vars="MYSQL_PORT=${{ secrets.MYSQL_PORT }}" \
-            --set-env-vars="MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}" \
-            --set-env-vars="MYSQL_USER=${{ secrets.MYSQL_USER }}" \
-            --set-env-vars="MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}" \
-            --set-env-vars="REDIS_HOST=10.140.0.14" \
-            --set-env-vars="REDIS_PORT=${{ secrets.REDIS_PORT }}" \
-            --set-env-vars="REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}" \
-            --set-env-vars="GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" \
-            --set-env-vars="PYTHONPATH=/app"
+            --service-account tjr104-tw-traffic-web@${{secrets.GCP_PROJECT_ID}}.iam.gserviceaccount.com \
+            --session-affinity \
+            --timeout=3600 \
+            --memory=1Gi \
+            --concurrency=4 \
+            --set-secrets MYSQL_HOST=MYSQL_HOST:latest,REDIS_HOST=REDIS_HOST:latest,GROQ_API_KEY=GROQ_API_KEY:latest \
+            --set-env-vars="^@^MYSQL_PORT=${{ secrets.MYSQL_PORT }}@MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}@MYSQL_USER=${{ secrets.MYSQL_USER }}@MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}@REDIS_PORT=${{ secrets.REDIS_PORT }}@REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}@PYTHONPATH=/app"

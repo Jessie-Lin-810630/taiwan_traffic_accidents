@@ -20,14 +20,19 @@ COPY requirements.txt .
 RUN python -m pip install  --no-cache-dir -U pip setuptools wheel && \
     python -m pip install --no-cache-dir -r requirements.txt
 
-# 複製原始碼 (note: 這行是為了讓image沒有掛載時也能獨立運作，但是compose.yml中有寫會用volume覆蓋，所以實際上以yml描述為主)
-COPY ./src ./src
+# 複製原始碼
+COPY ./src/__init__.py ./src/__init__.py
+COPY ./src/task/__init__.py ./src/task/__init__.py
+COPY ./src/pages ./src/pages
+COPY ./src/task/core ./src/task/core
+COPY ./src/util ./src/util
+COPY ./src/app.py ./src/app.py
 COPY ./.streamlit ./.streamlit
 
-# Streamlit預設監聽8501，
-# 但因為以後要遷移streamlit到cloud run執行，為了配合cloud Run習慣，在啟動指令中指定監聽8080
-# Compose.yml要記得寫streamlit容器內8080映射到主機8080
+# Streamlit預設監聽8501，但因以後要遷移到 cloud run service 執行，
+# 為了配合cloud Run service 習慣，提醒開放 8080。
 EXPOSE 8080
 
 # 啟動指令：--server.address=0.0.0.0 是容器化運行的關鍵、讓streamlit監聽所有網路介面
+# 開放 8080 port 靠下面這行
 CMD ["streamlit", "run", "src/app.py", "--server.port=8080", "--server.address=0.0.0.0"]
