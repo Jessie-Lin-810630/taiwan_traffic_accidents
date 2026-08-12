@@ -1,195 +1,296 @@
-# Traffic Accident ETL & Visualization Project
+# Taiwan Traffic Accident ETL × Night Market Accident Analytics Dashboard
 
-# Purpose
-This repository partially `refers to my previous contribution` (repository link: https://github.com/CarlHung65/tjr104_t01) where I collaborated with classmates. The difference between these two repositories is, the purpose of initiation of this repository is to `practice` `CI/CD concepts` and `GCP cloud run` which had not learned and implemented in the past.
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=plastic&logo=python&logoColor=white)
+![Poetry](https://img.shields.io/badge/deps-Poetry-60A5FA?style=plastic&logo=poetry&logoColor=white)
+![ERD](https://img.shields.io/badge/ERD-dbdiagram%20chart-FFCE1B?style=plastic&logo=lucid&logoColor=white)
+![MySQL](https://img.shields.io/badge/DB-MySQL-4479A1?style=plastic&logo=mysql&logoColor=white)
+![Redis](https://img.shields.io/badge/cache-Redis-FF4438?style=plastic&logo=redis&logoColor=white)
+![Airflow](https://img.shields.io/badge/orchestration-Apache%20Airflow%203-017CEE?style=plastic&logo=apacheairflow&logoColor=white)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B?style=plastic&logo=streamlit&logoColor=white)
+![Plotly](https://img.shields.io/badge/analytics-Plotly-%233F4F75.svg?style=plastic&logo=plotly&logoColor=white)
+![Folium](https://img.shields.io/badge/map-Folium-77B829?style=plastic&logo=leaflet&logoColor=white)
+![Tableau](https://img.shields.io/badge/BI-Tableau%20Public-E97627?style=plastic&logo=tableau&logoColor=white)
+![Google Cloud](https://img.shields.io/badge/SaaS-GCP%20Cloud%20Platform-4285F4?style=plastic&logo=googlecloud&logoColor=white)
+![Docker](https://img.shields.io/badge/Container-Docker-2496ED?style=plastic&logo=docker&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-000000?style=plastic&logo=githubactions&logoColor=white)
+![Ruff](https://img.shields.io/badge/lint-Ruff-D7FF64?style=plastic&logo=ruff&logoColor=black)
+![Claude Code](https://img.shields.io/badge/AI-Claude%20Code-D97757?style=plastic&logo=claudecode&logoColor=white)
+![pytest](https://img.shields.io/badge/test-pytest-0A9EDC?style=plastic&logo=pytest&logoColor=white)
+![Groq](https://img.shields.io/badge/AI-Groq-F55036?style=plastic&logo=groq&logoColor=white)  \
+![data.gov.tw](https://img.shields.io/badge/data%20source-data.gov.tw-005CA9?style=plastic&logo=googledocs&logoColor=white)
+![Open-Meteo](https://img.shields.io/badge/data%20source-Open--Meteo%20API-FF7F2A?style=plastic&logo=cloudflare&logoColor=white)
+![Google Maps](https://img.shields.io/badge/data%20source-Google%20Maps%20API-34A853?style=plastic&logo=googlemaps&logoColor=white)
+![Wikipedia](https://img.shields.io/badge/data%20source-Wikipedia-000000?style=plastic&logo=wikipedia&logoColor=white)
 
-# Business goal
-This repository demonstrates an end-to-end ETL (Extract, Transform, Load) pipeline for Taiwan traffic accident data, featuring a frontend dashboard built with Streamlit. The ultimate goal is to deploy a web microservice on Google Cloud Platform (GCP) using Cloud Run (https://streamlit-service-219985522999.asia-east1.run.app). The web service provided by GCP cloud run will communicate with backend GCP VM.
+> 🌐 **English** ｜ [繁體中文版README](./README-zh-TW.md)
 
-# Workflows in each branch
-Based on the CI/CD concepts, the project is organized into five sequential branches. Each branch represents a specific milestone in the development lifecycle, including its core functions, environment, and deliverables. Detailed are listed as follows.
 
-## Branch 1, name: "feature/etl-app"
-1. core func.: Establish the core ETL logic and ensure data insights are correctly visualized via Streamlit. This branch uses Poetry for dependency management and virtual environment control. All scripts must pass unit tests before being merged into subsequent branches.
-2. environment: python + MySQL on premises
-3. planned directories:
-    ```
-        my_project/
-            ├── src/
-            │   ├── pages/                       # streamlit 頁面（強制要跟app.py入口同一層）
-            |   ├── tasks/                       # ETL 任務核心邏輯
-            |   |     ├── e_*.pu, t_*.py, l_*.py # 後端資料庫ETL任務
-            |   |     ├── mart_table_sql/        # ETL完成後相關純MySQL查詢語句
-            |   |     └── core/                  # 存放過渡到前端展示時，pages/需要的UI元件、前端視圖運算等
-            |   ├── util                         # ETL 核心邏輯
-            │   └── app.py                       # Streamlit run入口
-            ├── tests/
-            │   └── test_transform.py            # Unittest 測試檔
-            ├── sandbox/
-            │   └── miscellaneous.py             # 放置一些想做版控、但現在暫時用不到的函式
-            ├── .env                             # 本地環境變數(e.g, DB_HOST=localhost)，
-            |                                      在github remote branch上會以.env.example示範
-            |
-            ├── pyproject.toml                   # Poetry 設定
-            ├── poetry.lock                      # 精確版本鎖定
-            └── .gitignore                       # 存放不需要trace的檔案、檔案類型
-    ```
-4. To make sure the modules in src/ can be successfully imported, remember to include /src/ in packages in pyproejct.toml. Then no requirement to add 'sys.path.insert' in the header of every python scripts.
-    ``` #for example,add:
-            packages = [{include = "src"}]'
-    ```
+## About
 
-## Branch 2, name: "feature/docker-integration"
-1. core func.: Containerize MySQL, Streamlit, and Apache Airflow. Airflow is utilized to schedule and automate ETL processes. This stage focuses on ensuring seamless communication and networking between containers.
-2. sources: merged from Branch 1 and pyproject.toml. ``Any modifications to database connections or service networking are handled in this branch.``
-3. planned directories:
-    ```
-        my-project/
-            ├── dags/                       # + 存放Airflow DAGs
-            ├── src/
-            |   ├── pages/                  # (From Branch 1)
-            |   ├── tasks/                  # (From Branch 1)
-            |   ├── util/                   # (From Branch 1)
-            │   └── app.py                  # (From Branch 1)
-            ├── sandbox/                    # (From Branch 1)
-            ├── .env                        # (Revised from Branch 1)容器化環境變數
-            |                                 (e.g, DB_HOST=容器名稱)，在github remote branch上
-            |                                 會以.env.example示範
-            |
-            ├── pyproject.toml              # (From Branch 1)
-            ├── poetry.lock                 # (From Branch 1)
-            ├── .gitignore                  # (From Branch 1)
-            ├── docker/                     # + 容器定義
-            │   ├── Dockerfile.airflow
-            │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # + 一鍵啟動所有容器
-            └── requirements.txt            # + 執行poetry export產出
-    ```
-## Branch 3, name: "develop/CI"
-1. core func.: Implement GitHub Actions to automate the building process of the docker containers in remote VM on GCP.
-2. sources: some components from Branch 2.
-3. planned directories:
-    ```
-        my-project/
-            ├── .github/                    # + GitHub Actions自動化腳本
-            │   └── workflows/
-            │       └── deploy.yml          # + 測試在GCP VM上building container
-            ├── dags/                       # (From Branch 2)
-            ├── src/                        # (From Branch 2)
-            |   ├── pages/
-            |   ├── tasks/
-            |   ├── util/
-            │   └── app.py
-            │
-            ├── .env                        # (From Branch 2，在github remote branch上
-            |                                  會以.env.example示範)
-            ├── .gitignore                  # (From Branch 2)
-            ├── docker/                     # (From Branch 2)
-            │   ├── Dockerfile.airflow
-            │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # (From Branch 2)
-            └── requirements.txt            # (From Branch 2)
-    ```
-## Branch 4, name: "UAT"
-1. core func: A branch to create production-similar environment, aiming at check successfully deploying the AirFlow, MySQL and Redis on a GCP VM instance, and deploing Streamlit container on cloud run.
-2. sources: Merged from develop/CI after all CI/CD checks pass.
-3. directories:
-    ```
-        my-project/
-            ├── .github/
-            │   └── workflows/
-            │       ├── deploy-backend-vm.yml   # + Revised from Branch 3
-            |       └── deploy-cloud-run.yml    # + 測試 VPC connector access
-            |                                     與cloud run service可運行。
-            |
-            ├── dags/                           # (From Branch 3)
-            ├── src/                            # (From Branch 3)
-            |   ├── pages/
-            |   ├── tasks/
-            |   ├── util/
-            │   └── app.py
-            │
-            ├── .env.example                # + Revised from Branch 3, environment variables in this
-            |                                  example are truely managed by Github secret or
-            |                                  GCP secret manager rather than .env file
-            |
-            ├── .gitignore                  # (From Branch 3)
-            ├── docker/                     # (From Branch 3)
-            │   ├── Dockerfile.airflow
-            │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # + Revised from Branch 3; Separate AirFlow standalone mode to
-            |                                 three containers, Scheduler、Trigger、api-server(webserver)
-            |
-            └── requirements.txt            # (From Branch 3)
-    ```
-## Branch 5, name: "main/production"
-1. core func: Production-ready branch for stable service.
-2. sources: All the components from branch 4.
-3. directories:
-    ```
-        my-project/
-            ├── README.md                       # Introduce the structure and user guide of this repository.
-            ├── .github/
-            │   └── workflows/
-            │       ├── deploy-backend-vm.yml   # A CD workflow to deploying the backend computing services
-            |       |                             on a GCP VM.
-            |       └── deploy-cloud-run.yml    # A CD workflow to deploying the frontend demonstation to
-            |                                     a GCP cloud run.
-            |
-            ├── dags/                           # AirFlow DAGs scheduling ETL pipeline in backend VM.
-            ├── src/                            # All the required scripts & functions before orchestrated
-            |   |                                 to an organized ETL data pipeline by AirFlow
-            |   |
-            |   ├── pages/                      # Frontend web pages via python-streamlit
-            |   ├── tasks/                      # Tasks constributing DAGs
-            |   ├── util/                       # Miscellaneous python functions without intact
-            |   |                                 business logics but repeatedly called by tasks/
-            |   |
-            │   └── app.py                      # Fronted home page via python-streamlit.
-            |
-            ├── .streamlit/                     # Configuration changes about streamlit.
-            |
-            ├── .env.example                # Environment variables required to CD workflow and ETL
-            |                                 datapipeline. In this example, they are truely managed by
-            |                                 Github secret or GCP secret manager rather than an .env file.
-            |
-            ├── .gitignore                  # Untracked file name/type during development.
-            |
-            ├── docker/                     # Recipes defining customized images of AirFlow & Streamlit
-            │   ├── Dockerfile.airflow
-            │   └── Dockerfile.streamlit
-            ├── docker-compose.yml          # Build and start MySQL, Redis and AirFlow containers
-            |                                 (Scheduler + trigger + api-server(webserver))
-            |                                 in backend GCP VM.
-            |
-            └── requirements.txt            # Defining package dependency when initiaing the containers.
-                                              This contents of this doc will be copied when initiating
-                                              containers by folloing the docker/Dockerfile.
-    ```
+By integrating three heterogeneous data sources, the geographic information of night
+markets across Taiwan, years of traffic accident records, and weather observations, this
+project builds a data-driven dashboard that quantifies traffic risk, helping both
+government agencies and the general public locate and identify the high-risk hotspots of
+what is known as "Taiwan, the pedestrian hell."
 
-# How to reproduce the development environment?
-1. Pull the branch 1 `feature/etl-app`. Suggests to use python >=3.12 and poetry >=2.x at your local end.
-3. Initiate the virtual environment by using poetry.
-    ```
-        cd <your專案根目錄>
-        poetry env use [path_to_python>=3.12]
-        poetry install
-    ```
-2. Always run under Project Root Directory (專案根目錄), then
-    ```
-        # Execute pure python scripts for ETL:
-            poetry run python -m src.tasks.e_crawling_...
-            poetry run python -m src.tasks.l_.....
+> This repo partially reuses [an earlier project built with classmates](https://github.com/CarlHung65/tjr104_t01).
+The difference is that this repo aims to **practice the CI/CD and GCP Cloud Run Service
+deployment that were never completed back then**, and to keep refactoring on top of it,
+improving query and write performance as well as log quality.
 
-        # Execute pure python scripts for frontend analysis:
-            poetry run python -m src.cores.c_data_services
+**Implementation outline**: traffic accident records of severity A1／A2 from the Taiwanese
+open data portal data.gov.tw, weather observations from Open-Meteo, and night market
+information from Wikipedia and Google Maps are written into a MySQL star schema through 7
+Airflow DAGs, with 1 more DAG writing into the Redis in-memory database, so that the
+Streamlit frontend can present the analysis of **traffic safety factors and risk levels
+around night markets**.
 
-        # Execute the SQL srcipts to create the table of analysis results:
-            You should have a MySQL server in your VM or local end first,
-            and connect to the server and execute the statements in 'mart_table_sql/analysis_overview_pedestrian_accidents.sql'.
-            In the branch feature/etl-app, statements are usually saved in pure .sql file; However, when running, either by GUI (e.g. workbench) or sqlalchemy ORM is okay.
-            These SQL statements will be integrated into a new DAG in the next branch so the sqlalchemey module will be introduced then.
+> [Live Demo](https://tjr104-tw-traffic-app-dev-219985522999.asia-east1.run.app/)
 
-        # Execute the streamlit:
-            poetry run streamlit run src/app.py
-    ```
+**How it works**:
+The backend services (MySQL, Redis and Airflow) run on a GCP VM, started with Docker
+Compose. The frontend Streamlit app is packaged as a standalone image and deployed to
+Cloud Run Service, reaching MySQL and Redis on the VM's internal network through direct
+VPC egress. Both GCP resources are deployed automatically via GitHub Actions. The ETL is
+split into pure functions for the three stages `e_` extract, `t_` transform and `l_` load
+under `src/task/`, while `dags/` is only responsible for wiring them together and deciding
+schedules and dependencies.
+The data model is a [star schema with five fact tables and four dimension tables](https://dbdiagram.io/d/new_Traffic-69a10021a3f0aa31e1405268);
+the Chinese-to-English column mapping is centralized in `src/util/table_column_map.py`, and
+the [ERD is available here](https://dbdiagram.io/d/new_Traffic-69a10021a3f0aa31e1405268).
+
+**Design highlights**:
+- The accident ETL uses **full load**. Every run fetches the entire dataset of the current
+year, and the primary key is hashed from "day serial number, time and coordinates", which
+keeps the write into MySQL idempotent. Backfilling past years is loaded in file batches
+rather than pulled into memory all at once.
+
+- The night market ETL also uses **full load**, taking "latitude, longitude and day of
+week" as the unique key. Failures of the Google Places API are reported in the `status`
+field of the response body rather than in the HTTP status code, so a custom exception class
+distinguishes transient from permanent failures and retries only the transient ones, so
+that quota is not wasted on retrying requests that are bound to fail.
+
+- The weather ETL for accident locations uses **incremental load**, because the Open-Meteo
+API has a request quota and the accident dataset is expected to reach 4 million rows, so a
+full load on every run would waste quota for nothing. To make the incremental load work,
+part of the stored weather data (the "observation point × month" pair) is encoded into the
+GCS object path, and the path listing itself serves as the progress table: when a DAG
+resumes or retries, it only requests the API for the missing paths. The transform stage
+then applies **the same predefined grid-rounding function** on both sides, ensuring the
+weather data and the accident data stored in MySQL map onto the same geographic grid at the
+same granularity, so a JOIN between the two tables always has matches.
+This design also reduces the number of API requests: roughly 300,000 to 400,000 accident
+coordinates per year are reduced to a few thousand observation points after rounding, which
+is equivalent to a few thousand geographic grids being requested.
+
+- **The data layers consumed by the frontend**, such as the statistics of accidents around
+night markets, are precomputed by DAG `d06`, which reads from MySQL, computes with pandas
+and writes into Redis as the cache layer, so frontend pages only read the cache. The
+balance between SQL and pandas was chosen against the machine specs allocated to this
+project, **so that apart from the cold-start wait, every data read and render during the
+lifetime of the Cloud Run Service stays within its memory quota and does not delay layer
+rendering, giving a better user experience**.
+
+## Feature
+
+Each DAG is an independently triggerable unit. The DAG files only wire tasks together, and
+the actual logic lives in the corresponding `e_`／`t_`／`l_` files under `src/task/`:
+
+| Feature | Description | Schedule | Entry point |
+| ---- | ---- | ---- | ------ |
+| Table & full-year calendar creation | Creates the database and the [star-schema fact and dimension tables](https://dbdiagram.io/d/new_Traffic-69a10021a3f0aa31e1405268), then populates the accident-day dimension table | Manual, one-off | DAG [`d01`](./dags/d01_create_calendar_this_year.py) |
+| Current-year accident ETL | Fetches A1／A2 severity accidents of the current year, loads three dimension tables and the accident master table in order, then writes the environment and party fact tables | 17:00 on the 1st, 10th and 20th of each month | DAG [`d02`](./dags/d02_track_recent_traffic_accidents.py) |
+| Historical accident backfill | Same flow for 2021–2025; the 65 files of five years are loaded in batches, keeping memory pressure low | Manual | DAG [`d03`](./dags/d03_track_hist_traffic_accidents.py) |
+| Mart layer rebuild | Runs the SQL under `mart_table_sql/` in order to rebuild the aggregates the frontend reads; any failing file rolls the whole batch back, so the mart layer never stops halfway through | 13:00 on the 15th of each month | DAG [`d04`](./dags/d04_analysis_pedestrian_accidents.py) |
+| Night market ETL | Gets the night market list from Wikipedia, then fills in coordinates and opening hours via Google Maps | 11:00 on the 15th of each month | DAG [`d05`](./dags/d05_track_night_markets.py) |
+| Redis precomputation | Statistics of accidents around night markets, computed ahead of time and cached for the frontend to read | 20:00 every 5 days | DAG [`d06`](./dags/d06_precompute_to_redis.py) |
+| Current-year weather ETL | Fetched from Open-Meteo, staged as GCS Parquet and then loaded into MySQL, using "observation point × month" as the resume checkpoint | 07:00 on the 3rd and 18th of each month | DAG [`d07`](./dags/d07_track_recent_weather.py) |
+| Historical weather backfill | Year-by-year backfill for 2021–2025 | Daily at 09:00, **pause manually once a DAG run has fully succeeded** | DAG [`d08`](./dags/d08_track_hist_weather.py) |
+
+The frontend is a multi-page Streamlit app:
+
+| Page | Description | File |
+| ---- | ---- | ---- |
+| Home | Navigation and entry points to the other pages | [app.py](./src/app.py) |
+| Nationwide severity analysis | Night market accident severity filtered by region, city and time | [v_act1_all_accident.py](./src/pages/v_act1_all_accident.py) |
+| City comparison | Safety benchmarking and year-over-year growth ranking by city and night market | [v_act1_city_accident.py](./src/pages/v_act1_city_accident.py) |
+| Single night market AI diagnosis | Accident breakdown within a custom radius; the statistics are handed to Groq AI to generate protective recommendations | [v_act1_single_accident.py](./src/pages/v_act1_single_accident.py) |
+| Before-and-after amendment analysis | Analytical dashboards built with Tableau | [v_act2_tableau.py](./src/pages/v_act2_tableau.py) |
+
+
+## Tech. Stack
+
+| Layer | Technology | Purpose |
+| ----- | ---- | ---- |
+| 01 Frontend | Streamlit, Plotly, Folium／streamlit-folium, Pandas, Tableau Public embedding | Multi-page dashboard, interactive charts and maps |
+| 02 Ingestion & Parsing | Requests, BeautifulSoup4, Tenacity, data.gov.tw／Open-Meteo API／Google Maps API | Fetching, parsing and retrying across sources |
+| 03 Database & Storage | MySQL 8.0, GCS, SQLAlchemy, PyMySQL, Google Cloud SDK | Relational database of accidents and weather (data layer); data lake as the staging layer for weather data |
+| 04 Cache | Redis 7, Streamlit `cache_data` deep copy | Keeps page loads from hitting MySQL with heavy computation, ensuring low-latency responses |
+| 05 Orchestration | Apache Airflow 3 (with LocalExecutor) | Manages DAG scheduling, dependencies and batching |
+| 06 Auth & Permissions | GCP Application Default Credentials, Service Account, IAP tunnel, GitHub Secrets | GCS access and CI/CD identity verification |
+| 07 Hosting & Deployment | - Backend: GCP VM with Docker containers <br>- Frontend: Cloud Run Service with Artifact Registry, direct VPC egress | Separate deployment of frontend and backend for read/write privilege separation |
+| 08 AI | Groq API | Generative protective recommendations on the [single night market page](./src/pages/v_act1_single_accident.py) |
+| 09 CI/CD & Version Control | - CI/CD: Git, GitHub Actions (`deploy-backend-vm` / `deploy-cloud-run`)<br>- Version control: Poetry | Automated deployment of the containers on the VM and of the Cloud Run Service |
+| 10 Rate Limiting & Flow Control | - API request progress tracked by GCS path names, used as the basis for incremental load<br>- Streaming load of large accident datasets | Avoids a full reload when a task resumes after interruption; controls memory and I/O pressure |
+| 11 Error Tracking & Logs | Custom `logger_crtx` | Readable logs and tracebacks both locally and in the cloud |
+| 12 Quality Gate | pytest, Ruff, pre-commit | Static checks and behavioural tests as a gate |
+| 13 Availability & Recovery | Upsert, primary keys hashed from business logic | Keeps writes idempotent when tasks are retried or files are processed in batches |
+
+
+## Architecture
+
+![flowchart](./docs/architecture-readme.png)
+
+## Project Structure
+
+```plaintext
+taiwan_traffic_accidents/          # project root
+├── dags/                          # Airflow DAGs; wiring and scheduling only
+│   ├── d01_create_calendar_this_year.py
+│   ├── d02_track_recent_traffic_accidents.py
+│   ├── d03_track_hist_traffic_accidents.py
+│   ├── d04_analysis_pedestrian_accidents.py
+│   ├── d05_track_night_markets.py
+│   ├── d06_precompute_to_redis.py
+│   ├── d07_track_recent_weather.py
+│   └── d08_track_hist_weather.py
+├── src/
+│   ├── app.py                     # Streamlit entry point (home page)
+│   ├── pages/                     #   v_*.py pages, must sit next to app.py
+│   ├── task/                      # pure functions per ETL stage; the prefix is the stage
+│   │   ├── e_*.py                 #   extract, returns a list of file paths
+│   │   ├── t_*.py                 #   transform, returns a DataFrame
+│   │   ├── l_*.py                 #   load, writes into MySQL
+│   │   ├── create_*_tables.py     #   DDL for data layer tables
+│   │   ├── mart_table_sql/        #   plain SQL scripts of the mart layer
+│   │   ├── exec_mart_sql.py       #   runs the mart layer SQL scripts
+│   │   └── core/                  #   Redis reads and rendering components for the frontend
+│   │
+│   └── util/                      # seven shared utility modules
+│       ├── mysql_utils.py         #   MySQL connection, update and upsert helpers
+│       ├── redis_utils.py         #   Redis connection, set cache, get cache
+│       ├── gcs_utils.py           #   GCS connection, upload, download
+│       ├── crawling_utils.py      #   general-purpose crawling helpers
+│       ├── read_traffic_accident_file.py  # reading accident CSV files
+│       ├── paths.py               #   keeps ETL scripts resolving paths correctly
+│       ├── logger_crtx.py         #   shared logger, independent of the runtime
+│       └── table_column_map.py    #   accident column name definitions
+├── test/unit_test/                # 213 pytest tests (test_task_* / test_util_*)
+├── docker/                        # Dockerfile.airflow, Dockerfile.streamlit
+├── docker-compose.yml             # starts MySQL, Redis and Airflow (one command on the backend VM)
+├── .github/workflows/             # deploy-backend-vm.yml, deploy-cloud-run.yml
+├── .streamlit/config.toml         # Streamlit settings
+├── docs/adr/                      # decision records (000N-<decision>.md) and execution summaries
+├── data/                          # crawled accident CSV and night market JSON, all gitignored and bind-mounted at runtime
+├── CONTEXT.md                     # glossary of the domain terms used in this project
+├── CLAUDE.md                      # Claude Code project guide and decision index
+├── pyproject.toml / poetry.lock   # Poetry dependencies
+└── requirements.txt               # exported by Poetry for the Dockerfiles
+```
+
+## Get Started
+
+### 1. Clone and set up
+
+```bash
+git clone --depth 1 https://github.com/Jessie-Lin-810630/taiwan_traffic_accidents_CICD_practice.git
+cd taiwan_traffic_accidents_CICD_practice
+```
+
+Pick one of the two paths below:
+
+#### Path A: just run the whole backend
+
+Only Docker is required; Python and Poetry are not needed locally. After preparing the
+`.env` file in the project root (see [section 2](#2-environment-variables)):
+
+```bash
+docker compose up -d --build
+```
+
+This starts MySQL, Redis and Airflow (scheduler / triggerer / api-server). The Airflow UI
+is at `http://<host>:8081`.
+
+> **The business database must be created manually**: the MySQL image in compose only
+> creates one database on first start, and that slot is already taken by the Airflow
+> metadata database. The business database for accident data has to be **created manually
+> as root and granted** to `MYSQL_USER` before the DDL in DAG `d01` can run successfully.
+
+#### Path B: reproduce the full development environment
+
+For anyone who intends to modify the code. Python >= 3.12 and Poetry >= 2.x are
+recommended.
+
+```bash
+poetry env use <path-to-python-3.12+>
+poetry install
+```
+
+`pyproject.toml` already sets `packages = [{include = "src"}]`, so modules can be imported
+absolutely as `src.xxx`.
+
+---
+
+### 2. Environment variables
+
+```bash
+cp .env.example .env      # fill in the real values after copying
+```
+
+15 variables in total:
+
+- **9 are read by the Python code**: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`,
+  `MYSQL_PASSWORD`, `MYSQL_DATABASE`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`,
+  `GOOGLE_MAP_API_KEY`, `GROQ_API_KEY`.
+- **6 more are needed by docker compose to start the Airflow containers**:
+  `MYSQL_AIRFLOW_DATABASE`, `MYSQL_ROOT_PASSWORD`, `AIRFLOW_SECRET_KEY`,
+  `AIRFLOW_ADMIN_USER`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ADMIN_EMAIL`.
+
+- GCS access does not go through environment variables; it uses Application Default
+Credentials (`gcloud auth application-default login`, or a service account attached to the
+deployment VM).
+
+### 3. Run
+
+```bash
+# run a single ETL task
+poetry run python -m src.task.e_crawling_traffic_accident
+
+# start the frontend
+poetry run streamlit run src/app.py
+
+# tests (no config file, the path must be given)
+poetry run pytest test/unit_test/
+```
+
+The mart layer SQL lives in `src/task/mart_table_sql/` and is normally executed as a batch
+by DAG `d04`; to run it on its own, connect to MySQL and execute the `.sql` files in that
+folder directly.
+
+### 4. Deployment
+
+Pushing to `main` triggers two workflows:
+
+- [`deploy-backend-vm.yml`](./.github/workflows/deploy-backend-vm.yml), which SSHes into the
+VM through an IAP tunnel, builds the Docker images and starts the containers.
+
+- [`deploy-cloud-run.yml`](./.github/workflows/deploy-cloud-run.yml), which builds the
+image, pushes it to Artifact Registry and deploys it to the Cloud Run Service.
+  > **There is no CI test gate; tests have to be run locally.** `MYSQL_HOST` and
+  > `REDIS_HOST` on Cloud Run point to the internal IP of the VM, so replacing the VM
+  > requires updating the workflow as well.
+
+### 5. (Optional) Continue development with Claude Code
+
+Start `claude` in the repo root and it automatically loads [`CLAUDE.md`](./CLAUDE.md) as
+context (ETL layering rules, logger and exception handling conventions, the decision index
+and the known state of the project).
+
+
+## What's Next?
+
+- [ ] **Test coverage of the frontend core**: `src/task/core/c_db.py` and
+  `c_data_service.py` have no tests yet.
+- [ ] **CI test gate**: the deployment workflows currently have no test gate; adding a
+  `pytest` step before deploying is worth considering.
