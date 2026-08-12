@@ -3,8 +3,8 @@ name: Deploy-Streamlit-to-Cloud-Run
 on:
   push:
     branches:
-      - main # 當代碼推送到main時觸發
-      - refactor/util-connection-layer
+      - main # 當代碼推送到main時觸發，部署 prod 服務
+      - UAT  # UAT 部署 dev 服務（ENV_NAME 的判斷在下面的 vars step）
     # 同一個事件不能同時給 paths 與 paths-ignore，這裡採白名單制；
     # docs/** 與 **.md 本來就不在白名單內，不需要另外排除。
     paths:
@@ -23,8 +23,30 @@ env:
   SERVICE_NAME: tjr104-tw-traffic-app
 
 jobs:
+  # Job 0: 測試 gate，不通過就不 build、不部署（ADR-0017）。
+  # 必須與部署放在同一支 workflow，needs 無法跨 workflow 相依。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 用 requirements.txt 而非 poetry：這份清單就是 image 實際安裝的內容，
+      # 順帶檢查它與 pyproject.toml 是否還同步。
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest test/unit_test/
+
   # Job 1: 打包 Docker Image 並推送到 Artifact Registry
   build-and-push:
+    needs: test # 測試沒過就不 build image
     runs-on: ubuntu-latest
     # Workload Identity Federation 靠 GitHub 簽發的 OIDC token 換 GCP 憑證，缺 id-token 會拿不到 token
     permissions:
