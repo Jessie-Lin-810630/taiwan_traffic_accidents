@@ -3,15 +3,13 @@ name: Deploy-to-GCP-VM-practice-cicd-tjr104  # 機器人的名字
 on:
   push:
     branches:
-      - main # 當代碼推送到main時觸發
+      - main # 生產環境
       - UAT  # 上線前的驗收兼測試環境
     paths-ignore:      # 忽略以下路徑的變動
       - '**.md'        # 所有 Markdown 文件
       - 'docs/**'      # docs 資料夾
 
 jobs:
-  # 測試 gate：不通過就不部署（ADR-0017）。
-  # 必須與 deploy 放在同一支 workflow，needs 無法跨 workflow 相依。
   test:
     runs-on: ubuntu-latest
     steps:
@@ -23,16 +21,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 用 requirements.txt 而非 poetry：這份清單就是容器實際安裝的內容，
-      # 順帶檢查它與 pyproject.toml 是否還同步。
+      # 用 requirements.txt 而非 poetry：這份清單本身就是下個 job 容器啟動時的安裝依據，
+      # 在 CI 階段可順帶檢查它與 pyproject.toml 是否還同步。
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run unit tests
         run: pytest test/unit_test/
 
-  deploy: # 將這一個job名稱命名為deploy
-    needs: test # 測試沒過就不部署
+  deploy:
+    needs: test
     runs-on: ubuntu-latest # 機器人跑在 GitHub 提供的 Linux 虛擬機上
     permissions:
       contents: read
