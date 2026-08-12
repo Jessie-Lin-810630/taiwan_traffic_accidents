@@ -30,16 +30,24 @@ from src.util.redis_utils import delete_cache, get_cache, set_cache
 
 logger = get_logger(__name__)
 
+# 本模組寫進 Redis 的所有快取，其存活時間的預設值。修改此常數時需先考量 d06 的排程
+# TTL 不得短於 DAG 排程間隔，且建議要是排程間隔的兩倍，容許下一次 DAG 失敗機會。
+# 個別函式要用不同的存活時間時，由呼叫端傳 `cache_ttl` 覆寫，不必改這個預設值。
+CACHE_TTL_SECONDS = 864000  # 10 天
+
 
 # ========================== 由前端調用 ==========================
 # 由app、act1、act2調用
-def get_all_nightmarkets() -> pd.DataFrame:
+def get_all_nightmarkets(cache_ttl: int = CACHE_TTL_SECONDS) -> pd.DataFrame:
     """讀取全臺夜市主檔，清洗座標並修正離島的地區歸屬。
 
     先讀 Redis 快取（鍵為 `market:list_all_auto_v3`，且必須含 `area_road` 與
     `region` 兩欄才算命中），沒有才查 MySQL。查回來後把六個座標欄轉成數值、
     把名稱或地址含琉球、蘭嶼、綠島的夜市歸到「東部與東部離島」，再剔除座標
-    缺漏的列。取得資料後會補寫快取（存活 12 小時），寫入失敗只記 warning。
+    缺漏的列。取得資料後會補寫快取，寫入失敗只記 warning。
+
+    Args:
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         pandas.DataFrame: 夜市主檔，形如：
@@ -100,7 +108,7 @@ def get_all_nightmarkets() -> pd.DataFrame:
     # read-through 快取：資料已取得，寫入失敗不影響本次回傳
     try:
         result = df_all_nm.to_dict("records")
-        set_cache(cache_key, result, ttl=43200)
+        set_cache(cache_key, result, ttl=cache_ttl)
     except RedisError:
         # 本層即為例外停止傳播之處，故完整記錄
         logger.warning(f"快取寫入失敗，不影響本次回傳: {cache_key}", exc_info=True)
@@ -170,16 +178,19 @@ def haversine_distance(
 
 
 # 由 app 調用
-def get_accident_heatmap_data(sample_size: int = 8000):
+def get_accident_heatmap_data(
+    sample_size: int = 8000, cache_ttl: int = CACHE_TTL_SECONDS
+):
     """統計熱力圖用的事故熱點資料。
 
     先讀 Redis 快取（鍵為 `traffic:global_heatmap_lite_v2`），沒有才查 MySQL。
     查詢回來的已經是聚合過的熱點 —— 落在臺灣範圍外的座標與重複不足 3 次的座標
     都已排除。熱點數仍超過 `sample_size` 時隨機抽樣（固定亂數種子，結果可重現），
-    避免前端地圖卡頓。取得後補寫快取（存活 12 小時）。
+    避免前端地圖卡頓。取得後補寫快取。
 
     Args:
         sample_size (int): 熱點數上限，超過就抽樣，預設 8000。
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         pandas.DataFrame: 熱點資料，形如：
@@ -232,7 +243,7 @@ def get_accident_heatmap_data(sample_size: int = 8000):
     # read-through 快取：資料已取得，寫入失敗不影響本次回傳
     try:
         result = df.to_dict("records")
-        set_cache(cache_key, result, ttl=43200)
+        set_cache(cache_key, result, ttl=cache_ttl)
     except RedisError:
         # 本層即為例外停止傳播之處，故完整記錄
         logger.warning(f"快取寫入失敗，不影響本次回傳: {cache_key}", exc_info=True)
@@ -242,13 +253,16 @@ def get_accident_heatmap_data(sample_size: int = 8000):
 
 
 # 由 act3 調用，現已無 act3
-def get_pedestrian_stats_by_region_monthly():
+def get_pedestrian_stats_by_region_monthly(cache_ttl: int = CACHE_TTL_SECONDS):
     """依地區與年月統計行人涉入的事故件數。
 
     先讀 Redis 快取（鍵為 `analysis:pedestrian_region_month`），沒有才查 mart 層
-    分析表，取得後補寫快取（存活 12 小時），寫入失敗只記 warning。
+    分析表，取得後補寫快取，寫入失敗只記 warning。
 
     目前沒有呼叫端，預留給尚未建立的 act3 分頁。
+
+    Args:
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         pandas.DataFrame: 統計結果，依年月與地區排序，形如：
@@ -284,7 +298,7 @@ def get_pedestrian_stats_by_region_monthly():
         raise
     try:
         result = df.to_dict("records")
-        set_cache(cache_key, result, ttl=43200)
+        set_cache(cache_key, result, ttl=cache_ttl)
     except RedisError:
         logger.warning(f"快取寫入失敗，不影響本次回傳: {cache_key}", exc_info=True)
 
@@ -293,12 +307,14 @@ def get_pedestrian_stats_by_region_monthly():
 
 
 # 由 act3 調用，現已無 act3
-def get_pedestrian_trend(lat=None, lon=None, radius_km=0.5):
+def get_pedestrian_trend(
+    lat=None, lon=None, radius_km=0.5, cache_ttl: int = CACHE_TTL_SECONDS
+):
     """統計行人事故的逐月趨勢，給定座標時只計算該範圍內。
 
     不給座標時統計全臺，快取鍵是固定的；給了座標則以該點為中心、依半徑換算出
     方框範圍過濾（1 度約 111 公里），快取鍵帶上座標。座標一律走 bind parameter
-    傳入查詢。先讀快取，沒有才查 mart 層分析表並補寫（存活 12 小時）。
+    傳入查詢。先讀快取，沒有才查 mart 層分析表並補寫。
 
     目前沒有呼叫端，預留給尚未建立的 act3 分頁。
 
@@ -306,6 +322,7 @@ def get_pedestrian_trend(lat=None, lon=None, radius_km=0.5):
         lat (float | None): 中心點緯度；與 `lon` 任一為 `None` 就統計全臺。
         lon (float | None): 中心點經度。
         radius_km (float): 方框半徑，單位公里，預設 0.5。
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         pandas.DataFrame: 逐月統計，依年月排序，形如：
@@ -327,9 +344,10 @@ def get_pedestrian_trend(lat=None, lon=None, radius_km=0.5):
         params = {}
     else:
         # 如有指定經緯度範圍
-        cache_key = (
-            f"analysis:pedestrian_trend_local_v2:{round(lat, 4)}_{round(lon, 4)}"
-        )
+        # 快取鍵取到小數第 4 位，查詢範圍就必須以同一組值算，否則小數第 5 位以後
+        # 不同的兩個座標會共用一把鍵，後來者直接讀到前一個座標的結果
+        lat, lon = round(lat, 4), round(lon, 4)
+        cache_key = f"analysis:pedestrian_trend_local_v2:{lat}_{lon}"
         offset = float(radius_km) / 111.0  # 1度約111.0 km，將圓半徑轉換成經緯度
 
         # 範圍邊界
@@ -368,7 +386,7 @@ def get_pedestrian_trend(lat=None, lon=None, radius_km=0.5):
     # read-through 快取：資料已取得，寫入失敗不影響本次回傳
     try:
         result = df.to_dict("records")
-        set_cache(cache_key, result, ttl=43200)
+        set_cache(cache_key, result, ttl=cache_ttl)
     except RedisError:
         # 本層即為例外停止傳播之處，故完整記錄
         logger.warning(f"快取寫入失敗，不影響本次回傳: {cache_key}", exc_info=True)
@@ -462,12 +480,17 @@ def _build_batch_bbox_query(
 
 
 # 由 dags/d06_precompute_to_redis 調用
-def get_and_slice_nightmarkets_multibatches() -> list:
+def get_and_slice_nightmarkets_multibatches(
+    cache_ttl: int = CACHE_TTL_SECONDS,
+) -> list:
     """把夜市清單補齊邊界座標後切成批次存入 Redis，回傳各批的鍵。
 
     每 30 個夜市一批。夜市若沒有東北、西南兩個邊界端點，就以中心點往該方向
-    擴 0.005 度（約 500 公尺）補上。批次資料本身放進 Redis（存活 12 小時），
+    擴 0.005 度（約 500 公尺）補上。批次資料本身放進 Redis，
     只回傳輕量的鍵字串，避免 DAG 的 XCom 塞進大量資料。
+
+    Args:
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         list[str]: 各批次在 Redis 中的鍵，形如：
@@ -541,7 +564,7 @@ def get_and_slice_nightmarkets_multibatches() -> list:
 
     for i, batch in enumerate(batches):
         key_of_a_batch = f"xcom_claim_check:{batch_uuid}:batch_{i}"
-        set_cache(key_of_a_batch, batch, 43200)  # 存入Redis，保留12小時
+        set_cache(key_of_a_batch, batch, cache_ttl)  # 存入Redis
         keys_of_batches.append(key_of_a_batch)  # 只回傳key給其他函式用
 
     logger.info(f"已生成 {len(keys_of_batches)} 個Redis keys。")
@@ -553,6 +576,7 @@ def cal_accidents_nearby_nightmarket(
     batch_key: str,
     radius_m_list: list[float | int] | None = None,
     year_targets: list[int | str] | None = None,
+    cache_ttl: int = CACHE_TTL_SECONDS,
 ):  # process_market_batch()原名
     """計算一個批次內每個夜市周邊的事故，把粗篩與細篩結果寫入 Redis。
 
@@ -571,6 +595,7 @@ def cal_accidents_nearby_nightmarket(
             預設 `[3000]`。
         year_targets (list[int | str] | None): 細篩年份清單，`"all_sample"`
             代表不分年份，預設 `["all_sample"]`。
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Returns:
         str: 形如 `"xcom_claim_check:3f2a8c1d-...:batch_0 處理完成"` 的訊息。
@@ -621,7 +646,7 @@ def cal_accidents_nearby_nightmarket(
         # 這把 key 是 aggregate_national_master() 唯一會讀的，因此無條件寫入，
         # 不能取決於呼叫端有沒有把 3000 與 "all_sample" 傳進 radius_m_list／year_targets
         cache_key_rough = f"traffic:nearby_v12:{nm_lat:.4f}_{nm_lon:.4f}_{ROUGH_RADIUS_KM:.1f}_all_sample"
-        set_cache(cache_key_rough, df_nearby_accidents, 43200)
+        set_cache(cache_key_rough, df_nearby_accidents, cache_ttl)
         logger.info(f"cache_key_rough: {cache_key_rough} 存取成功")
 
         # 細篩：半徑清單與年份清單，的組合、來計算車禍與夜市的交集
@@ -649,13 +674,15 @@ def cal_accidents_nearby_nightmarket(
             df_target = df_nearby_accidents[mask]
 
             # 預計算路徑：寫入失敗即 raise
-            set_cache(cache_key_per_product, df_target, 43200)
+            set_cache(cache_key_per_product, df_target, cache_ttl)
 
     return f"{batch_key} 處理完成"
 
 
 # 由 dags/d06_precompute_to_redis 調用
-def aggregate_national_master(batch_keys: list[dict]):
+def aggregate_national_master(
+    batch_keys: list[dict], cache_ttl: int = CACHE_TTL_SECONDS
+):
     """聚合各批次的預計算結果成全臺總表，並產出儀表板用的統計快取。
 
     先用批次鍵還原全臺夜市清單，逐夜市讀取 `cal_accidents_nearby_nightmarket()`
@@ -672,6 +699,7 @@ def aggregate_national_master(batch_keys: list[dict]):
 
     Args:
         batch_keys (list[str]): 各批次夜市清單在 Redis 中的鍵。
+        cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
 
     Raises:
         RuntimeError: 所有批次皆找不到周邊事故快取，聚合不出全臺總表。
@@ -730,6 +758,12 @@ def aggregate_national_master(batch_keys: list[dict]):
         if "accident_hourtime" in final_df.columns:
             final_df["Hour"] = final_df["accident_hourtime"]
 
+        # 在 PDI 計分時這三欄則必須存在
+        required_cols = {"accident_hourtime", "death_count", "injury_count"}
+        missing_cols = required_cols - set(final_df.columns)
+        if missing_cols:
+            raise KeyError(f"聚合結果缺少 PDI 計分所需欄位：{sorted(missing_cols)}")
+
         # 計算PDI分數
         final_df["weight"] = np.where(
             (final_df["Hour"] >= 17) | (final_df["Hour"] == 0), 1.5, 1.0
@@ -740,7 +774,7 @@ def aggregate_national_master(batch_keys: list[dict]):
         final_df["pdi_score"] = final_df["severity"] * final_df["weight"]
 
         # 存入給其他圖表用的原始巨型 DataFrame
-        set_cache("market:national_master_df", final_df, ttl=43200)
+        set_cache("market:national_master_df", final_df, ttl=cache_ttl)
         logger.info(
             f"全台夜市周邊總表聚合完成，共 {len(final_df)} 筆精準事故，已存入 Redis。"
         )
@@ -798,14 +832,14 @@ def aggregate_national_master(batch_keys: list[dict]):
         }
 
         # 將巨觀數字打包存入一個專屬的Key
-        set_cache("traffic:stats:audit_macro", macro_bundle)
+        set_cache("traffic:stats:audit_macro", macro_bundle, ttl=cache_ttl)
 
         # 微觀統計 (Micro)：單一特定夜市 500m 總計
         # 將 300 個夜市分開存成各自的 Key，讓前端地圖點擊時可以更快拉資料
         market_groups = final_df.groupby("nightmarket_name")
         for m_name, m_df in market_groups:
             m_stats = generate_stats(m_df, ["Year", "Quarter", "Month", "time_slot"])
-            set_cache(f"traffic:stats:audit_market:{m_name}", m_stats)
+            set_cache(f"traffic:stats:audit_market:{m_name}", m_stats, ttl=cache_ttl)
 
         logger.info("Audit儀表板輕量化統計運算完成，已存入 Redis。")
 

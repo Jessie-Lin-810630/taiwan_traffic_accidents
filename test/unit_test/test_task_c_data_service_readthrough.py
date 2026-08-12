@@ -142,8 +142,8 @@ class TestGetAllNightmarketsCleaning:
 
         assert list(result["nightmarket_name"]) == ["正常"]
 
-    def test_補寫快取的存活時間是十二小時(self):
-        """read-through 補寫的 TTL 與其他讀取型函式一致。"""
+    def test_補寫快取的存活時間與模組常數一致(self):
+        """所有快取共用同一個 TTL，不讓各處各寫一個數字。"""
         with patch.object(ds, "get_cache", return_value=None):
             with patch.object(
                 ds,
@@ -154,7 +154,20 @@ class TestGetAllNightmarketsCleaning:
                     ds.get_all_nightmarkets()
 
         assert m_set.call_args.args[0] == "market:list_all_auto_v3"
-        assert m_set.call_args.kwargs["ttl"] == 43200
+        assert m_set.call_args.kwargs["ttl"] == ds.CACHE_TTL_SECONDS
+
+    def test_呼叫端可覆寫存活時間(self):
+        """維護者要臨時縮短某一支的 TTL 時，不必去改模組常數。"""
+        with patch.object(ds, "get_cache", return_value=None):
+            with patch.object(
+                ds,
+                "get_night_markets_table",
+                return_value=pd.DataFrame([_night_market_row()]),
+            ):
+                with patch.object(ds, "set_cache") as m_set:
+                    ds.get_all_nightmarkets(cache_ttl=518400)
+
+        assert m_set.call_args.kwargs["ttl"] == 518400
 
 
 class TestGetNightmarketsForPageSelector:
@@ -388,6 +401,43 @@ class TestGetPedestrianTrend:
 
         assert global_key == "analysis:pedestrian_trend_global_v2"
         assert local_key == "analysis:pedestrian_trend_local_v2:25.0878_121.524"
+
+    def test_快取鍵與查詢範圍以同一組座標計算(self):
+        """鍵取到小數第 4 位，範圍就得用同一組值算，否則鍵相同而範圍不同。"""
+        with patch.object(ds, "get_cache", return_value=None) as m_get:
+            with patch.object(
+                ds,
+                "get_accident_table_pedestrian_involved_in",
+                return_value=pd.DataFrame(),
+            ) as m_db:
+                with patch.object(ds, "set_cache"):
+                    ds.get_pedestrian_trend(lat=25.087811, lon=121.5240, radius_km=0.5)
+
+        key = m_get.call_args.args[0]
+        params = m_db.call_args.args[1]
+        offset = 0.5 / 111.0
+
+        assert key == "analysis:pedestrian_trend_local_v2:25.0878_121.524"
+        assert params["min_lat"] == pytest.approx(25.0878 - offset)
+        assert params["max_lat"] == pytest.approx(25.0878 + offset)
+
+    def test_小數第五位不同的兩個座標查詢範圍相同(self):
+        """既然共用一把快取鍵，兩者的查詢範圍就必須真的相同。"""
+        ranges = []
+        with patch.object(ds, "get_cache", return_value=None):
+            with patch.object(
+                ds,
+                "get_accident_table_pedestrian_involved_in",
+                return_value=pd.DataFrame(),
+            ) as m_db:
+                with patch.object(ds, "set_cache"):
+                    ds.get_pedestrian_trend(lat=25.087811, lon=121.5240)
+                    ranges.append(m_db.call_args.args[1])
+
+                    ds.get_pedestrian_trend(lat=25.087849, lon=121.5240)
+                    ranges.append(m_db.call_args.args[1])
+
+        assert ranges[0] == ranges[1]
 
     @pytest.mark.parametrize(
         "lat, lon", [(25.0878, None), (None, 121.5240)], ids=["只給緯度", "只給經度"]

@@ -168,13 +168,21 @@ class TestGetAndSliceNightmarketsMultibatches:
         assert market["e_lon"] == pytest.approx(market["lon"] + 0.005)
         assert market["w_lon"] == pytest.approx(market["lon"] - 0.005)
 
-    def test_批次快取存活十二小時(self):
-        """批次是暫存的寄物櫃，TTL 與其他預計算快取一致。"""
+    def test_批次快取的存活時間與模組常數一致(self):
+        """批次是暫存的寄物櫃，TTL 與其他預計算快取共用同一個常數。"""
         with patch.object(ds, "get_all_nightmarkets", return_value=self._markets_df(1)):
             with patch.object(ds, "set_cache") as m_set:
                 ds.get_and_slice_nightmarkets_multibatches()
 
-        assert m_set.call_args.args[2] == 43200
+        assert m_set.call_args.args[2] == ds.CACHE_TTL_SECONDS
+
+    def test_呼叫端可覆寫批次快取的存活時間(self):
+        """DAG 要調整某一輪的 TTL 時，由呼叫端傳值即可。"""
+        with patch.object(ds, "get_all_nightmarkets", return_value=self._markets_df(1)):
+            with patch.object(ds, "set_cache") as m_set:
+                ds.get_and_slice_nightmarkets_multibatches(cache_ttl=518400)
+
+        assert m_set.call_args.args[2] == 518400
 
 
 class TestAggregateNationalMaster:
@@ -331,6 +339,17 @@ class TestAggregateNationalMaster:
         _, m_del = self._run(market, self._nearby_df())
 
         m_del.assert_called_once_with("xcom_claim_check:uuid:batch_0")
+
+    @pytest.mark.parametrize(
+        "missing_col", ["accident_hourtime", "death_count", "injury_count"]
+    )
+    def test_缺少_pdi_計分欄位時明講缺了什麼(self, missing_col):
+        """時間欄位是有才補，但這三欄是計分的必要輸入，缺了要說得出是哪一欄。"""
+        market = _market("士林夜市", 25.0, 121.0)
+        nearby = self._nearby_df().drop(columns=[missing_col])
+
+        with pytest.raises(KeyError, match="PDI 計分所需欄位"):
+            self._run(market, nearby)
 
     def test_周邊事故快取為空時不進總表(self):
         """聚合不出資料時拋出，不讓 task 顯示成功（ADR-0003）。"""
