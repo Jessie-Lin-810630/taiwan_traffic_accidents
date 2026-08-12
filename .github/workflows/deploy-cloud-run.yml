@@ -41,6 +41,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run unit tests
+        # requirements.txt 只有第三方依賴，不含專案本身，因此 src.* 的絕對匯入
+        # 要靠 PYTHONPATH —— 與兩個容器的做法一致（compose 設 /opt/airflow，
+        # Cloud Run 設 /app）
+        env:
+          PYTHONPATH: .
         run: pytest test/unit_test/
 
   # Job 1: 打包 Docker Image 並推送到 Artifact Registry
