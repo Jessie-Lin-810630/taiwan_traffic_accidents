@@ -134,7 +134,7 @@ The frontend is a multi-page Streamlit app:
 | 09 CI/CD & Version Control | - CI/CD: Git, GitHub Actions (`deploy-backend-vm` / `deploy-cloud-run`)<br>- Version control: Poetry | Automated deployment of the containers on the VM and of the Cloud Run Service |
 | 10 Rate Limiting & Flow Control | - API request progress tracked by GCS path names, used as the basis for incremental load<br>- Streaming load of large accident datasets | Avoids a full reload when a task resumes after interruption; controls memory and I/O pressure |
 | 11 Error Tracking & Logs | Custom `logger_crtx` | Readable logs and tracebacks both locally and in the cloud |
-| 12 Quality Gate | pytest, Ruff, pre-commit | Static checks and behavioural tests as a gate |
+| 12 Quality Gate | pytest (315 tests), Ruff, pre-commit, CI test gate | Static checks and behavioural tests as a gate; a failing test blocks the deployment |
 | 13 Availability & Recovery | Upsert, primary keys hashed from business logic | Keeps writes idempotent when tasks are retried or files are processed in batches |
 
 
@@ -176,7 +176,7 @@ taiwan_traffic_accidents/          # project root
 │       ├── paths.py               #   keeps ETL scripts resolving paths correctly
 │       ├── logger_crtx.py         #   shared logger, independent of the runtime
 │       └── table_column_map.py    #   accident column name definitions
-├── test/unit_test/                # 213 pytest tests (test_task_* / test_util_*)
+├── test/unit_test/                # 315 pytest tests (test_task_* / test_util_*)
 ├── docker/                        # Dockerfile.airflow, Dockerfile.streamlit
 ├── docker-compose.yml             # starts MySQL, Redis and Airflow (one command on the backend VM)
 ├── .github/workflows/             # deploy-backend-vm.yml, deploy-cloud-run.yml
@@ -270,16 +270,17 @@ folder directly.
 
 ### 4. Deployment
 
-Pushing to `main` triggers two workflows:
+Pushing to `main` or `UAT` triggers two workflows. **Both run the full test suite
+first and stop before deploying if anything fails**:
 
 - [`deploy-backend-vm.yml`](./.github/workflows/deploy-backend-vm.yml), which SSHes into the
-VM through an IAP tunnel, builds the Docker images and starts the containers.
+VM through an IAP tunnel, builds the Docker images and starts the containers. The branch
+pulled on the VM is whichever branch triggered the run.
 
 - [`deploy-cloud-run.yml`](./.github/workflows/deploy-cloud-run.yml), which builds the
 image, pushes it to Artifact Registry and deploys it to the Cloud Run Service.
-  > **There is no CI test gate; tests have to be run locally.** `MYSQL_HOST` and
-  > `REDIS_HOST` on Cloud Run point to the internal IP of the VM, so replacing the VM
-  > requires updating the workflow as well.
+  > `MYSQL_HOST` and `REDIS_HOST` on Cloud Run point to the internal IP of the VM, so
+  > replacing the VM requires updating the workflow as well.
 
 ### 5. (Optional) Continue development with Claude Code
 
@@ -290,7 +291,5 @@ and the known state of the project).
 
 ## What's Next?
 
-- [ ] **Test coverage of the frontend core**: `src/task/core/c_db.py` and
-  `c_data_service.py` have no tests yet.
-- [ ] **CI test gate**: the deployment workflows currently have no test gate; adding a
-  `pytest` step before deploying is worth considering.
+- [ ] **Run the CI test gate for real**: the gate is in place but has never executed on
+  GitHub Actions; the first verification will happen on the next push to `main` or `UAT`.

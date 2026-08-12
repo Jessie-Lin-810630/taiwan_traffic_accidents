@@ -99,7 +99,7 @@ Streamlit 打包成獨立 image 部署到 Cloud Run Service，透過 direct VPC 
 | 09 CI/CD & Version Control | - CI/CD：Git、GitHub Actions（`deploy-backend-vm` / `deploy-cloud-run`）<br>- Version Control： Poetry | 自動部署 VM 中容器、自動部署 Cloud Run Service。 |
 | 10 Rate Limiting & Flow Control | - API 請求進度用 GCS 路徑名稱追蹤，作為增量載入判斷依據。<br>- 大容量事故資料串流載入 | 控制任務中斷續傳時不重新全量載入、控制記憶體負擔、I/O 負擔 |
 | 11 Error Tracking & Logs | 自製 `logger_crtx` | 兼顧地端與雲端 logs 可讀性與 trackback |
-| 12 Quality Gate | pytest、Ruff、pre-commit | 以靜態檢查與行為測試把關 |
+| 12 Quality Gate | pytest（315 個測試）、Ruff、pre-commit、CI 測試 gate | 以靜態檢查與行為測試把關，測試沒過即擋下部署 |
 | 13 Availability & Recovery | upsert、以業務邏輯計算雜湊值當主鍵 | 重試任務或是將檔案分批做 ETL 時仍確保資料寫入的冪等性 |
 
 
@@ -141,7 +141,7 @@ taiwan_traffic_accidents/          # 專案根目錄
 │       ├── paths.py               #   管理 ETL 任務腳本的執行目錄準確
 │       ├── logger_crtx.py         #   共用 logger，不依賴執行環境
 │       └── table_column_map.py    #   事故資料欄位名稱定義
-├── test/unit_test/                # pytest 213 個測試（test_task_* / test_util_*）
+├── test/unit_test/                # pytest 315 個測試（test_task_* / test_util_*）
 ├── docker/                        # Dockerfile.airflow、Dockerfile.streamlit
 ├── docker-compose.yml             # 啟動 MySQL、Redis 與 Airflow（後端 VM 一鍵啟動）
 ├── .github/workflows/             # deploy-backend-vm.yml、deploy-cloud-run.yml
@@ -229,13 +229,13 @@ mart 層的 SQL 放在 `src/task/mart_table_sql/`，正常情況由 DAG `d04` �
 
 ### 4. 部署
 
-推 `main` 會觸發兩條 workflow：
+推 `main` 或 `UAT` 會觸發兩條 workflow，**兩條都先跑一次完整測試，沒過就不部署**：
 
-- [`deploy-backend-vm.yml`](./.github/workflows/deploy-backend-vm.yml)，經 IAP tunnel SSH 進 VM，建立 docker image 並啟動 docker container。
+- [`deploy-backend-vm.yml`](./.github/workflows/deploy-backend-vm.yml)，經 IAP tunnel SSH 進 VM，建立 docker image 並啟動 docker container。VM 上拉取的分支由觸發的分支決定。
 
 - [`deploy-cloud-run.yml`](./.github/workflows/deploy-cloud-run.yml)，build image 推送 Artifact Registry 後部署到 Cloud Run Service。
-  > **沒有 CI 測試 gate，測試需在本機自行跑過。** Cloud Run 上的 `MYSQL_HOST` /
-  > `REDIS_HOST` 是 VM 的 Internal IP，換 VM 要同步改 workflow。
+  > Cloud Run 上的 `MYSQL_HOST` / `REDIS_HOST` 是 VM 的 Internal IP，換 VM 要同步改
+  > workflow。
 
 ### 5. （選用）以 Claude Code 接手開發
 
@@ -245,6 +245,5 @@ mart 層的 SQL 放在 `src/task/mart_table_sql/`，正常情況由 DAG `d04` �
 
 ## What's Next?
 
-- [ ] **前端核心的測試覆蓋**：`src/task/core/c_db.py` 與 `c_data_service.py` 尚無測試。
-- [ ] **CI 測試 gate**：目前部署 workflow 沒有測試關卡，可考慮在 deploy 前加一段
-  `pytest`。
+- [ ] **實跑一次 CI 測試 gate**：gate 已就位但尚未在 GitHub Actions 上執行過，
+  第一次驗證會發生在下一次推 `main` 或 `UAT` 時。

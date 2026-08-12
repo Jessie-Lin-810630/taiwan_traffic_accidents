@@ -116,13 +116,14 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 
 ### CI/CD
 
-推 `main` 會觸發兩條 workflow（`**.md` 與 `docs/**` 的變動會被忽略）：
+推 `main` 或 `UAT` 會觸發兩條 workflow（`**.md` 與 `docs/**` 的變動會被忽略）：
 
 - `deploy-backend-vm.yml` —— 經 IAP tunnel SSH 進 VM，重建 compose
 - `deploy-cloud-run.yml` —— build image 推 Artifact Registry，`gcloud run deploy`
 
-沒有 CI 測試 gate，測試需在本機自行跑過。Cloud Run 上的 `MYSQL_HOST` / `REDIS_HOST`
-是 VM 的內網 IP，改 VM 要同步改 workflow。
+兩條都以 `test` job 為前置，**測試沒過就不部署**（ADR-0017）。VM 上拉取的分支由觸發
+的分支決定（`${GITHUB_REF_NAME}`），不寫死任何一支。Cloud Run 上的 `MYSQL_HOST` /
+`REDIS_HOST` 是 VM 的內網 IP，改 VM 要同步改 workflow。
 
 ## 決策索引
 
@@ -144,21 +145,25 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 | 0014 | 事故主鍵由事故內容決定，而非單次 run 的排序名次 |
 | 0015 | 事故事實表的載入以檔案批次為單位 |
 | 0016 | 熱點圖的減量在 SQL 完成，而非 pandas |
+| 0017 | 部署以測試通過為前提 |
 
 ## 已知狀態
 
 - **前端已上線 Cloud Run**（dev 環境），首頁 OOM 已修復（ADR-0016），
   記憶體設定仍在觀察期
-- **天氣 ETL 已實作、待驗收** —— `fact_hourly_weather` 目前是空的，
-  `t_`/`l_` 兩支至今未在真實資料上跑過（ADR-0013 執行摘要）
+- **天氣 ETL 已上線** —— `d07`／`d08` 已在 VM 上跑過真實資料，
+  `fact_hourly_weather` 已有內容
 - **`get_accident_hotspots()` 尚無呼叫者**，新查詢未在真實資料上驗證過
   （ADR-0016 執行摘要第四章）
-- `test/unit_test/` 現有 **213 個測試**。命名慣例：測 `src/task/*.py` 用
-  `test_task_*.py`、測 `src/util/*.py` 用 `test_util_*.py`；測試函式名用中文，
-  docstring 寫出「釘住的是哪個決策」。`c_db.py` 與 `c_data_service.py` 尚無覆蓋
+- `test/unit_test/` 現有 **315 個測試**，全部走 mock，不需要 MySQL／Redis／網路／
+  環境變數。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用
+  `test_util_*.py`；測試函式名用中文，**每個測試都要有 docstring 寫出「釘住的是什麼」**
 - ETL 產出落在 `data/raw` 與 `data/processed`（皆在 `.gitignore` 內，compose 有掛載）
 - `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分
-- `pyproject.toml` 與 `requirements.txt` 不會自動同步，改依賴時要一起更新
+- `pyproject.toml` 與 `requirements.txt` 不會自動同步，改依賴時要一起更新 ——
+  CI 的 test job 以 `requirements.txt` 安裝，不同步時會在部署前被擋下
+- **CI 測試 gate 尚未實跑過**，第一次驗證會發生在下一次推 `main` 或 `UAT` 時
+  （ADR-0017 執行摘要第四章）
 
 ## Agent 工具設定
 
