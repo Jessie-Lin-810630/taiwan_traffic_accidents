@@ -162,8 +162,8 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 - `src/task/` 與 `src/task/core/` 有 `temp_try_*.py` 暫存檔，非正式流程的一部分
 - `pyproject.toml` 與 `requirements.txt` 不會自動同步，改依賴時要一起更新 ——
   CI 的 test job 以 `requirements.txt` 安裝，不同步時會在部署前被擋下
-- **CI 測試 gate 尚未實跑過**，第一次驗證會發生在下一次推 `main` 或 `UAT` 時
-  （ADR-0017 執行摘要第四章）
+- **CI 測試 gate 已在真實環境驗證兩次**：第一次擋下 `ModuleNotFoundError`、未部署，
+  修法後第二次兩條 workflow 全綠（ADR-0017 執行摘要第四章）
 
 ## Agent 工具設定
 

@@ -92,6 +92,20 @@ project, **so that apart from the cold-start wait, every data read and render du
 lifetime of the Cloud Run Service stays within its memory quota and does not delay layer
 rendering, giving a better user experience**.
 
+## Table of Contents
+
+- [About](#about)
+- [Feature](#feature)
+- [Tech. Stack](#tech-stack)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Get Started](#get-started)
+  - [1. Clone and set up](#1-clone-and-set-up)
+  - [2. Environment variables](#2-environment-variables)
+  - [3. Run](#3-run)
+  - [4. Deployment](#4-deployment)
+  - [5. (Optional) Continue development with Claude Code](#5-optional-continue-development-with-claude-code)
+
 ## Feature
 
 Each DAG is an independently triggerable unit. The DAG files only wire tasks together, and
@@ -287,9 +301,3 @@ image, pushes it to Artifact Registry and deploys it to the Cloud Run Service.
 Start `claude` in the repo root and it automatically loads [`CLAUDE.md`](./CLAUDE.md) as
 context (ETL layering rules, logger and exception handling conventions, the decision index
 and the known state of the project).
-
-
-## What's Next?
-
-- [ ] **Run the CI test gate for real**: the gate is in place but has never executed on
-  GitHub Actions; the first verification will happen on the next push to `main` or `UAT`.

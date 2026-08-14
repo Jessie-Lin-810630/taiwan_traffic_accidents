@@ -57,6 +57,20 @@ Streamlit 打包成獨立 image 部署到 Cloud Run Service，透過 direct VPC 
 
 - 前端**調用的資料圖層**，例如夜市周邊事故的統計，由 DAG `d06` 預先從 MySQL 讀取後經過 Pandas 套件計算後寫進 Redis 作為快取層，前端頁面只讀快取；SQL 與 Pandas 的使用比重係根據本專案配給的雲端服務機器規格大小做過取捨，**以期 Cloud Run Service 啟動與運行期間除了冷啟動的等待時間之外，其他資料讀取與顯示都不會超過服務的記憶體配額、延遲圖層展開，達到較好的使用者體驗**。
 
+## Table of Contents
+
+- [About](#about)
+- [Feature](#feature)
+- [Tech. Stack](#tech-stack)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Get Started](#get-started)
+  - [1. Clone 與環境建置](#1-clone-與環境建置)
+  - [2. 環境變數](#2-環境變數)
+  - [3. 執行](#3-執行)
+  - [4. 部署](#4-部署)
+  - [5. (選用) 以 Claude Code 接手開發](#5-選用以-claude-code-接手開發)
+
 ## Feature
 
 每條 DAG 都是一塊可獨立觸發的功能，DAG 檔只做串接，實際邏輯在 `src/task/` 對應的
@@ -241,9 +255,3 @@ mart 層的 SQL 放在 `src/task/mart_table_sql/`，正常情況由 DAG `d04` �
 
 在 repo 根目錄直接啟動 `claude`，即會自動載入 [`CLAUDE.md`](./CLAUDE.md)（ETL 分層
 規則、logger 與例外處理規矩、決策索引、已知狀態）作為 context。
-
-
-## What's Next?
-
-- [ ] **實跑一次 CI 測試 gate**：gate 已就位但尚未在 GitHub Actions 上執行過，
-  第一次驗證會發生在下一次推 `main` 或 `UAT` 時。
