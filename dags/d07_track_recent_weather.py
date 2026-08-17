@@ -92,7 +92,7 @@ def accident_weather_pipeline():
             GoogleAPIError: 盤點或寫入暫存檔失敗。
 
         Notes:
-            回傳值設計，參考 ADR-00013。
+            回傳值設計，參考 ADR-0013。
         """
         return prep_batch_plan(df_acc_unique_loc, target_year, batch_size)
 
@@ -149,7 +149,7 @@ def accident_weather_pipeline():
             pymysql.MySQLError: 寫入失敗。
 
         Notes:
-            trigger_rule="all_done" 參考 ADR-00013。
+            trigger_rule="all_done" 參考 ADR-0013。
         """
         l_fact_hourly_weather(target_year, database=database, batch_size=50)
 

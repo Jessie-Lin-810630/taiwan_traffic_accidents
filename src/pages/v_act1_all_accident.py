@@ -106,11 +106,10 @@ def main() -> None:
     Notes:
         「快取故障」與「快取裡沒有這筆資料」的語意分離，參考 ADR-0003。
     """
-    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     try:
         df_market = ds.get_all_nightmarkets()
     except Exception:
-        # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+        # 前端是例外停止傳播之處，須完整記錄
         logger.error("資料服務讀取失敗", exc_info=True)
         st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
         st.stop()
@@ -139,8 +138,6 @@ def main() -> None:
         try:
             df_raw = get_dynamic_national_data()
         except RedisError:
-            # 快取「故障」與「快取裡沒有這筆資料」自 ADR-0003 起語意分離：
-            # 前者拋 RedisError，後者才會回傳空表。
             logger.error("全台總表快取讀取失敗", exc_info=True)
             st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
             st.stop()

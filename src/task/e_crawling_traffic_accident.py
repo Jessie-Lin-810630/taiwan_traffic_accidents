@@ -27,7 +27,7 @@ from src.util.paths import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 logger = get_logger(__name__)
 
-# data.gov.tw 的憑證鏈有問題，本模組是全專案唯一停用 SSL 驗證之處（ADR-0006 子決策 6）。
+# data.gov.tw 的憑證鏈有問題，本模組是全專案唯一停用 SSL 驗證之處
 # `crawling_utils` 的預設是 verify=True，停用與否由呼叫端明確傳入。
 VERIFY_SSL = False
 

@@ -28,9 +28,6 @@ from src.util.redis_utils import get_cache
 
 logger = get_logger(__name__)
 
-# .env 由 mysql_utils / redis_utils 的模組層 load_dotenv() 載入，分頁不重複載入；
-# 路徑一律以專案根為基準，不從 __file__ 推算（ADR-0007）。
-
 st.set_page_config(layout="wide", page_title="單一夜市事故AI分析", page_icon="📊")
 
 
@@ -150,12 +147,11 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     with ui.page_timer():
         try:
             df_market = ds.get_nightmarkets_for_page_selector()
         except Exception:
-            # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+            # 前端是例外停止傳播之處，須完整記錄
             logger.error("夜市清單讀取失敗", exc_info=True)
             st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
             st.stop()
@@ -291,8 +287,6 @@ def main():
                     target_market["lat"], target_market["lon"], radius_km
                 )
             except RedisError:
-                # 快取「故障」與「快取裡沒有這筆資料」自 ADR-0003 起語意分離：
-                # 前者拋 RedisError，後者才會回傳空表。
                 logger.error(
                     f"夜市周邊事故快取讀取失敗：{sel_market}",
                     exc_info=True,
@@ -616,7 +610,7 @@ def main():
                         risky_loc,
                     )
                 except Exception:
-                    # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+                    # 前端是例外停止傳播之處，須完整記錄
                     logger.error(
                         f"AI 分析報告生成失敗：{target_market['MarketName']}",
                         exc_info=True,
@@ -680,7 +674,6 @@ def get_ai_analysis(
         必填設定在真正要用的那一刻才驗證，參考 ADR-0008。
     """
     api_key = os.getenv("GROQ_API_KEY")
-    # 必填設定在真正要用的那一刻驗證，避免缺設定被下游的認證錯誤掩蓋（ADR-0008）
     if not api_key:
         raise ValueError("未設定 GROQ_API_KEY，請檢查環境變數設置")
 

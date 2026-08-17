@@ -61,10 +61,10 @@ WEATHER_VARIABLES = [
     "wind_gusts_10m",
 ]
 
-# 經緯度進位的網格大小，單位為度（ADR-0012）。
+# 經緯度進位的網格大小，單位為度。
 GRID_STEP = 0.05
 
-# 請求時一律指定的高程，單位為公尺（ADR-0012）。
+# 請求時一律指定的高程，單位為公尺。
 # 不指定的話 OpenMeteo 會依每個座標各自的海拔調整氣溫，
 # 同一個網格內的座標因此拿到不同的值，進位就失去意義。
 FIXED_ELEVATION_M = 10
@@ -73,7 +73,7 @@ FIXED_ELEVATION_M = 10
 MAX_FAILURE_RATE = 0.2
 
 # OpenMeteo 歷史觀測的延遲天數：今天往前 3 天的資料才查得到。
-# 這個延遲是「一個月何時算抓完」的判準，見 `is_month_complete()`（ADR-0013）。
+# 這個延遲是「一個月何時算抓完」的判準，見 `is_month_complete()`。
 API_LAG_DAYS = 3
 
 
@@ -350,7 +350,7 @@ def _request_weather_api(
     Notes:
         不把故障吞成空結果參考 ADR-0003。
     """
-    # 高程要逐地點指定，數量必須與經緯度一致（ADR-0012）
+    # 高程要逐地點指定，數量必須與經緯度一致
     location_count = len(lats_str.split(","))
     params = {
         "latitude": lats_str,
@@ -370,7 +370,6 @@ def _request_weather_api(
         response.raise_for_status()
 
     except requests.exceptions.HTTPError as exc:
-        # 429 不會被重試，是確定的失敗；5xx 仍可能自癒，記 warning（ADR-0006）
         if exc.response is not None and exc.response.status_code == 429:
             logger.error(
                 "OpenMeteo 回報 429（額度用盡）。"
@@ -429,7 +428,7 @@ def e_get_uniq_acc_geo(
     # 1. 指派要查詢的資料表名稱
     table_name = "fact_accident_main"
 
-    # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
+    # 2. 撰寫DQL語句。
     query = f"""SELECT longitude, latitude
                     FROM {table_name}
                         WHERE CAST(LEFT(accident_id, 4) AS SIGNED) = :target_year
@@ -448,7 +447,7 @@ def e_get_uniq_acc_geo(
     # 4. 經緯度進位到氣象網格
     # OpenMeteo 背後的模式把地表切成約 0.07 度的格子，同一格內的座標拿到的是
     # 同一份觀測值。進位到比它略細的 0.05 度，可讓落在同一格的事故共用一次
-    # API 請求，大幅減少請求次數（ADR-0012）。
+    # API 請求，大幅減少請求次數。
     df_acc["lat_round"] = round_to_weather_grid(df_acc["latitude"])
     df_acc["lon_round"] = round_to_weather_grid(df_acc["longitude"])
 
@@ -496,7 +495,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     table_name = "fact_accident_main"
     table_name_to_join = "dim_accident_day"
 
-    # 2. 撰寫DQL語句。年份走 bind parameter，不內插（ADR-0009）
+    # 2. 撰寫DQL語句。
     # 分隔符是空白不是 "T"：天氣側在 t_fact_hourly_weather 會把 ISO8601 的 "T"
     # 換成空白，兩側只要有一邊不同，merge 會一列都對不上而且不會報錯。
     query = f"""SELECT t1.accident_id,
@@ -530,7 +529,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     # df_acc: ['accident_id', 'approx_accident_datetime', 'longitude', 'latitude']
 
     # 4. 經緯度進位到氣象網格。必須與 e_get_uniq_acc_geo 用同一支函式，
-    # 否則 t_fact_hourly_weather 的 merge 會一列都對不上（ADR-0012）。
+    # 否則 t_fact_hourly_weather 的 merge 會一列都對不上。
     df_acc["lat_round"] = round_to_weather_grid(df_acc["latitude"])
     df_acc["lon_round"] = round_to_weather_grid(df_acc["longitude"])
 
@@ -586,8 +585,7 @@ def prep_batch_plan(
     """
     today = datetime.now(TAIPEI).date()
 
-    # 1. 每個觀測點對應的檔名。與 e_crawler_weatherapi() 存檔時走同一支函式，
-    #    兩邊才不會像 ADR-0013 之前那樣組出對不上的名字。
+    # 1. 每個觀測點對應的檔名。與 e_crawler_weatherapi() 存檔時走同一支函式。
     df_acc_uniq_loc = df_acc_unique_loc.copy()
     df_acc_uniq_loc["file_name"] = [
         blob_file_name(lat, lon)
@@ -631,8 +629,7 @@ def prep_batch_plan(
                 {"batch_id": batch_id, "target_year": target_year, "month": month}
             )
 
-    # 3. 進度。DagRun 的成功／失敗看不出抓取有沒有推進（下游 trigger_rule 是
-    #    all_done），這一行才是判斷「還在前進」還是「卡住了」的依據（ADR-0013）。
+    # 3. 進度。這一行判斷執行批次量。
     logger.info(
         f"{target_year} 年共需 {len(months) * len(df_acc_uniq_loc)} 個（觀測點, 月）"
         f"組合（{len(df_acc_uniq_loc)} 個觀測點 × {len(months)} 個月），"
@@ -697,9 +694,9 @@ def e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
         lats_str, lons_str, start_date, end_date, WEATHER_VARIABLES
     )
 
-    # 5. 回傳筆數必須與請求的地點數相同 —— 下方是**按位置**把天氣掛回事故座標，
+    # 5. 回傳筆數必須與請求的地點數相同 —— 下方是"按位置"把天氣掛回事故座標，
     # 一旦筆數對不上，位置對應就不再成立，天氣會被掛到錯誤的地點。
-    # 這種錯位不會自己報錯，只會靜靜寫進 MySQL（同 ADR-0010 的教訓），故先斷言。
+    # 這種錯位不會自己報錯，只會靜靜寫進 MySQL，故先斷言。
     expected = len(lat_round_lst)
     if len(records) != expected:
         raise RuntimeError(
@@ -760,7 +757,7 @@ def e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
                 df=df_a_loc_hourly,
             )
         except Exception as exc:
-            # 單一檔案失敗仍可能由整批重試自癒，故記 warning 而非 error（ADR-0006）
+            # 單一檔案失敗仍可能由整批重試成功，故記 warning 而非 error
             logger.warning(f"寫入 {file_name} 失敗：{exc}")
         else:
             saved += 1

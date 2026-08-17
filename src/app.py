@@ -101,11 +101,10 @@ def main():
     splash.empty()  # 清掉splash容器。
 
     # 4. 取得夜市主檔，供側邊欄的夜市選單使用
-    # 資料服務層自 ADR-0003 起一律拋出例外，由前端決定如何降級。
     try:
         df_market = ds.get_all_nightmarkets()
     except Exception:
-        # 前端是例外停止傳播之處，須完整記錄（ADR-0003）
+        # 前端是例外停止傳播之處，須完整記錄
         logger.error("首頁資料載入失敗", exc_info=True)
         st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
         st.stop()
