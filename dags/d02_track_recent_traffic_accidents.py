@@ -1,6 +1,6 @@
 """DAG d02：抓取今年度的 A1、A2 交通事故資料並載入 MySQL。
 
-每兩天的 11 點跑一次。四個 task 串成一條線：抓檔 → 三張維度表 → 事故主檔 →
+每月 1、10、20 日的 17 點跑一次。四個 task 串成一條線：抓檔 → 三張維度表 → 事故主檔 →
 其餘兩張事實表。順序不能調換，因為事實表需要維度表的外鍵，而環境與當事人
 兩張表又需要主檔的事故編號。
 
@@ -46,7 +46,7 @@ default_args = {
     dag_id="d02_track_recent_traffic_accidents",
     default_args=default_args,
     description="A ETL process from requesting data.gov.tw for the traffic accidents in 2026 until loading to MySQL database",
-    schedule="00 11 */2 * *",  # 每月1、3、5、7、10、12日的11點00分執行一次
+    schedule="00 17 1,10,20 * *",  # 每月1、10、20日的17點00分執行一次
     start_date=datetime(2026, 4, 4, 17, 00, tzinfo=timezone(offset=timedelta(hours=8))),
     catchup=False,
     tags=["traffic", "taskflow"],

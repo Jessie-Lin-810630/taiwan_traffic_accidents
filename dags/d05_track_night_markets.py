@@ -1,6 +1,6 @@
 """DAG d05：爬取夜市清單與 Google Maps 地理資訊，載入 `fact_night_markets`。
 
-每月 5 日 11 點跑一次。夜市的座標與營業時間是前端計算周邊事故的依據，因此本
+每月 15 日 11 點跑一次。夜市的座標與營業時間是前端計算周邊事故的依據，因此本
 DAG 要排在 d06 預計算之前。抓取會耗用 Google Maps API 額度。
 """
 
@@ -38,7 +38,7 @@ default_args = {
     dag_id="d05_track_night_markets",
     default_args=default_args,
     description="A ETL process from requesting GoogleMaps API for the latest night markets until loading to MySQL database",
-    schedule="00 11 05 * *",  # 每月5日的11點00分執行一次
+    schedule="00 11 15 * *",  # 每月15日的11點00分執行一次
     start_date=None,
     catchup=False,
     tags=["night_markets", "GoogleMap", "taskflow"],
