@@ -1,7 +1,7 @@
-"""DAG d08：逐年回補歷史年度（2021 至 2024 年）的天氣觀測，並載入 MySQL。
+"""DAG d08：逐年回補歷史年度（2021 至 2025 年）的天氣觀測，並載入 MySQL。
 
-一次性的回補工作。四年份量約需連續跑七天才抓得完，因此每天 09:00 跑一次，
-排在 d07（07:00）之後，讓當年度先取走需要的 API 額度。四個年度依序執行，
+一次性的回補工作。五年份量約需連續跑八-九天才抓得完，因此每天 09:00 跑一次，
+排在 d07（07:00）之後，讓當年度先取走需要的 API 額度。五個年度依序執行，
 前一年載入完成後才開始下一年。**補完之後請手動 pause 這支 DAG。**
 
 task 的組成與 d07 相同，差別只在多包一層年度迴圈。
@@ -34,7 +34,7 @@ default_args = {
     dag_id="d08_track_hist_weather",
     default_args=default_args,
     description="ETL process from requesting weather API for the weather data between 'January 01st~December 31th' until loading to MySQL database",
-    # 四年回補約 61,320 次額度，受日限額 10,000 約束，需連續跑約 7 天。
+    # 五年回補約 76,650 次額度，受日限額 10,000 約束，需連續跑約 8-9 天。
     # 每天 09:00 讓 d07（07:00）先取走當年度要的額度，剩下的才給回補。
     # 補完之後手動 pause 掉這支 DAG，它是一次性工作。
     schedule="00 09 * * *",
@@ -44,7 +44,7 @@ default_args = {
 )
 def accident_weather_pipeline():
     """逐年串接天氣 ETL，前一年載入完成後才開始下一年。"""
-    target_years = [2021, 2022, 2023, 2024]
+    target_years = [2021, 2022, 2023, 2024, 2025]
     database = os.getenv("MYSQL_DATABASE")
     previous_year_group = None
 
