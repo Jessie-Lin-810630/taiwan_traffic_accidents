@@ -91,9 +91,9 @@ def accident_weather_pipeline():
     @task(
         pool="weather_api_pool",  # 需到UI進一步給值，指一次可以執行多少個同類task
         retries=3,  # 如果出現except，最多再重試3次，總計每個task可跑4次
-        retry_delay=timedelta(minutes=20),  # 20分鐘後才重試
+        retry_delay=timedelta(minutes=40),  # 40分鐘後才重試
         retry_exponential_backoff=True,  # 讓等待時間隨次數增加(指數退避)
-        max_retry_delay=timedelta(hours=2),  # 指數退避下，最長間隔2小時後重試
+        max_retry_delay=timedelta(hours=3),  # 指數退避下，最長間隔3小時後重試
         # 排除等待時間，如果執行總時間超過2小時，殺掉該task避免佔用pool資源
         execution_timeout=timedelta(hours=2),
         do_xcom_push=False,  # 回傳的xcom不推送到下一個task，省掉存xcom的記憶體空間
