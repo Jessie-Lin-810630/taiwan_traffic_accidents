@@ -477,7 +477,7 @@ def upsert_to_table(
     #     INSERT INTO {table} ({columns}) VALUES ({placeholders}) AS n
     #     ON DUPLICATE KEY UPDATE {col}=n.{col}
 
-    logger.info(f"==== Starting insertion into table `{table}` ====")
+    logger.info(f"==== Start to insert into table `{table}` by upserting. ====")
 
     conn = None
     cursor = None
@@ -574,7 +574,7 @@ def update_table(
         logger.warning(f"沒有任何資料列要更新到 `{table}`，略過")
         return None
 
-    logger.info(f"==== Starting updating table `{table}` ====")
+    logger.info(f"==== Start to update table `{table}`. ====")
 
     conn = None
     cursor = None

@@ -203,7 +203,8 @@ def t_fact_main_ref_to_fact_weather(
         database=database,
     )
     logger.info(
-        f"Finished the query! The fetched result contains columns: \n {df_weather_record.columns}"
+        f"Finished the query, got {len(df_weather_record)} weather records. "
+        f"Start to match them with accidents."
     )
 
     # 4. 將天氣與事故事實表 join 後取得 weather_record_id
@@ -231,7 +232,7 @@ def t_fact_main_ref_to_fact_weather(
     df_mrg = df_mrg.loc[:, ["accident_id", "weather_record_id"]]
 
     logger.info(
-        f"FOR Year {target_year}: {len(df_mrg)}/{len(df_all_acc_loc)} 筆事故"
-        f"配對到 fact_hourly_weather 的觀測紀錄"
+        f"FOR Year {target_year}: {len(df_mrg)}/{len(df_all_acc_loc)} accidents "
+        f"were matched to observation records in fact_hourly_weather."
     )
     return df_mrg

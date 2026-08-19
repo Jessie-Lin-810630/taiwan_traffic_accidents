@@ -362,7 +362,9 @@ def _request_weather_api(
         "elevation": ",".join([str(FIXED_ELEVATION_M)] * location_count),
     }
 
-    logger.info(f"向 OpenMeteo 請求 {start_date} ~ {end_date} 的天氣觀測")
+    logger.info(
+        f"Requesting weather observations from OpenMeteo for {start_date} ~ {end_date}."
+    )
 
     try:
         response = requests.get(OPENMETEO_ARCHIVE_URL, params=params, timeout=120)
@@ -372,20 +374,24 @@ def _request_weather_api(
     except requests.exceptions.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             logger.error(
-                "OpenMeteo 回報 429（額度用盡）。"
-                "限流窗口為分／時／日，重試無用；"
-                "下一次 DAG run 會由 prep_batch_plan 自動續跑未完成的批次。"
+                "OpenMeteo returned 429 (quota exhausted). "
+                "The rate limit windows are per minute/hour/day, so retrying here is "
+                "useless; the next DAG run will resume the unfinished batches via "
+                "prep_batch_plan."
             )
         else:
-            logger.warning(f"OpenMeteo HTTP 回應異常：{exc}（將視情況重試）")
+            logger.warning(
+                f"Unexpected HTTP response from OpenMeteo: {exc} "
+                f"(may be retried depending on the status)."
+            )
         raise
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-        logger.warning(f"OpenMeteo 連線失敗：{exc}（將視情況重試）")
+        logger.warning(f"Failed to connect to OpenMeteo: {exc} (may be retried).")
         raise
 
     except Exception:
-        logger.error("OpenMeteo 請求發生未預期的錯誤")
+        logger.error("An unexpected error occurred while requesting OpenMeteo.")
         raise
 
     payload = response.json()
@@ -396,7 +402,7 @@ def _request_weather_api(
             f"OpenMeteo 回應不含任何地點資料（{start_date} ~ {end_date}）"
         )
 
-    logger.info(f"收到 OpenMeteo 回應，共 {len(records)} 個地點")
+    logger.info(f"Received the OpenMeteo response covering {len(records)} locations.")
     return records
 
 
@@ -440,9 +446,7 @@ def e_get_uniq_acc_geo(
     df_acc = get_table_from_sqlserver(
         query, {"target_year": target_year}, database=database
     )
-    logger.info(
-        f"Finished the query! The fetched result contains columns: \n {df_acc.columns}"
-    )
+    logger.info("Finished the query. Start to compute how many unique locations.")
 
     # 4. 經緯度進位到氣象網格
     # OpenMeteo 背後的模式把地表切成約 0.07 度的格子，同一格內的座標拿到的是
@@ -458,7 +462,7 @@ def e_get_uniq_acc_geo(
     df_acc_uniq_loc = df_acc_uniq_loc.loc[:, ["lat_round", "lon_round"]]
 
     logger.info(
-        f"FOR Year {target_year}: \nGot {len(df_acc_uniq_loc)} unique locations "
+        f"FOR Year {target_year}: \n\t\t\t\tGot {len(df_acc_uniq_loc)} unique locations "
         f"from the TABLE {table_name} containing {len(df_acc)} accidents."
     )
 
@@ -523,9 +527,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     df_acc = get_table_from_sqlserver(
         query, {"target_year": target_year}, database=database
     )
-    logger.info(
-        f"Finished the query! The fetched result contains columns: \n {df_acc.columns}"
-    )
+    logger.info("Finished the query. Start to compute how many locations.")
     # df_acc: ['accident_id', 'approx_accident_datetime', 'longitude', 'latitude']
 
     # 4. 經緯度進位到氣象網格。必須與 e_get_uniq_acc_geo 用同一支函式，
@@ -540,7 +542,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     # 5. 轉換成str，與天氣側的 datetime_ISO8601 對得上
     df_acc["approx_accident_datetime"] = df_acc["approx_accident_datetime"].astype(str)
     logger.info(
-        f"FOR Year {target_year}: \nGot {len(df_acc)} locations "
+        f"FOR Year {target_year}: \n\t\t\t\tGot {len(df_acc)} locations "
         f"from the TABLE {table_name} containing {len(df_acc)} accidents."
     )
 
@@ -631,9 +633,11 @@ def prep_batch_plan(
 
     # 3. 進度。這一行判斷執行批次量。
     logger.info(
-        f"{target_year} 年共需 {len(months) * len(df_acc_uniq_loc)} 個（觀測點, 月）"
-        f"組合（{len(df_acc_uniq_loc)} 個觀測點 × {len(months)} 個月），"
-        f"GCS 上已有 {existing_total} 個，本次排出 {len(batch_plan)} 個批次"
+        f"Year {target_year} needs {len(months) * len(df_acc_uniq_loc)} "
+        f"(location, month) combinations "
+        f"({len(df_acc_uniq_loc)} locations x {len(months)} months); "
+        f"{existing_total} already exist on GCS, "
+        f"{len(batch_plan)} batches are planned for this run."
     )
 
     return batch_plan
@@ -714,8 +718,8 @@ def e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
             # 於是 [{}] 這類回應會得到 0/1 == 0、被算成完全成功 ——
             # 一筆都沒存到卻顯示成功，且事後從 log 完全無從察覺。
             logger.warning(
-                f"{target_year}-{month:02d} 批次 {batch_id} "
-                f"第 {j + 1} 個地點的回應不含 hourly，略過"
+                f"{target_year}-{month:02d} batch {batch_id}: "
+                f"the response of location no {j + 1} contains no hourly, skipped."
             )
             continue
 
@@ -758,21 +762,21 @@ def e_crawler_weatherapi(batch_id: int, target_year: int, month: int) -> str:
             )
         except Exception as exc:
             # 單一檔案失敗仍可能由整批重試成功，故記 warning 而非 error
-            logger.warning(f"寫入 {file_name} 失敗：{exc}")
+            logger.warning(f"Failed to write {file_name}: {exc}")
         else:
             saved += 1
             logger.info(f"Successfully saved the file, {file_name}!")
 
     # 7. 結算失敗率。分母是請求的地點數，因此「缺 hourly」「寫入失敗」
     # 「回傳筆數不足」三種靜默損失都算得進來。
-    label = f"{target_year}-{month:02d} 批次 {batch_id}"
+    label = f"{target_year}-{month:02d} batch {batch_id}"
     failure_rate = 1 - saved / expected
     if failure_rate > MAX_FAILURE_RATE:
         raise RuntimeError(f"{label} 寫入失敗率過高：成功 {saved}/{expected}")
     if failure_rate > 0:
-        logger.warning(f"{label} 部分失敗：成功 {saved}/{expected}")
+        logger.warning(f"{label} partially failed: {saved}/{expected} saved.")
 
-    logger.info(f"Finished {label}! 成功 {saved}/{expected}")
+    logger.info(f"Finished {label}! {saved}/{expected} saved.")
 
     # 8. sleep緩解server負擔
     time.sleep(random.uniform(5, 10))

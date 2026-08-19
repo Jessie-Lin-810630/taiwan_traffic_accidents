@@ -69,7 +69,8 @@ def l_fact_hourly_weather(
 
     batch_count = math.ceil(len(all_files) / batch_size)
     logger.info(
-        f"{target_year} 年共 {len(all_files)} 個觀測點檔案，分 {batch_count} 批寫入"
+        f"Year {target_year}: {len(all_files)} location files in total, "
+        f"loading in {batch_count} batches."
     )
 
     # 3. 建立天氣資料事實表
@@ -82,7 +83,9 @@ def l_fact_hourly_weather(
     for i in range(0, len(all_files), batch_size):
         batch_files = all_files[i : i + batch_size]
         batch_no = i // batch_size
-        logger.info(f"Downloading batch {batch_no}（{len(batch_files)} 個檔案）")
+        logger.info(
+            f"==== Downloading the batch {batch_no} (containing {len(batch_files)} files). ===="
+        )
 
         df_list = []
         for f in batch_files:
@@ -90,14 +93,16 @@ def l_fact_hourly_weather(
 
             # 這些 Parquet 的欄位是 e_* task 自己訂的，缺欄代表當時寫壞了，非 API 問題。
             if "datetime_ISO8601" not in df_w_chunk.columns:
-                logger.warning(f"{f} 缺少 datetime_ISO8601 欄位，跳過")
+                logger.warning(f"{f} lacks the column datetime_ISO8601, skipped.")
                 skipped_files += 1
                 continue
 
             df_list.append(df_w_chunk)
 
         if not df_list:
-            logger.warning(f"Batch {batch_no} 的檔案全數無法使用，略過本批")
+            logger.warning(
+                f"All files in batch {batch_no} are unusable, skipping this batch."
+            )
             continue
 
         df_weather_raw = pd.concat(df_list, ignore_index=True)
@@ -125,9 +130,9 @@ def l_fact_hourly_weather(
         )
 
         total_rows += len(df_transformed)
-        logger.info(
-            f"Batch {batch_no} finished: inserted {len(df_transformed)} rows, "
-            f"total so far {total_rows}"
+        logger.success(
+            f"==== Batch {batch_no} finished in which {len(df_transformed)} rows were treated. "
+            f"Accumulative treated rows so far {total_rows}. ===="
         )
 
     # 6. 結算損壞檔案的比例
@@ -138,9 +143,11 @@ def l_fact_hourly_weather(
             f"比例過高，抓取階段可能出過問題"
         )
     if skipped_files:
-        logger.warning(f"{target_year} 年跳過 {skipped_files}/{len(all_files)} 個檔案")
+        logger.warning(
+            f"Year {target_year}: skipped {skipped_files}/{len(all_files)} files."
+        )
 
-    logger.info(f"Successfully loaded {target_year} data to MySQL：{total_rows} 列")
+    logger.info(f"Successfully loaded {target_year} data to MySQL: {total_rows} rows.")
 
     # 7. 回讀 fact_hourly_weather 的 autoincrement pk，回填成 fact_accident_main 的
     # soft reference。
