@@ -462,7 +462,7 @@ def e_get_uniq_acc_geo(
     df_acc_uniq_loc = df_acc_uniq_loc.loc[:, ["lat_round", "lon_round"]]
 
     logger.info(
-        f"FOR Year {target_year}: \n\t\t\t\tGot {len(df_acc_uniq_loc)} unique locations "
+        f"FOR Year {target_year}: \n\t\t\t\t\t\t\t\tGot {len(df_acc_uniq_loc)} unique locations "
         f"from the TABLE {table_name} containing {len(df_acc)} accidents."
     )
 
@@ -542,7 +542,7 @@ def e_get_all_acc_geo(target_year: int, *, database: str | None = None) -> pd.Da
     # 5. 轉換成str，與天氣側的 datetime_ISO8601 對得上
     df_acc["approx_accident_datetime"] = df_acc["approx_accident_datetime"].astype(str)
     logger.info(
-        f"FOR Year {target_year}: \n\t\t\t\tGot {len(df_acc)} locations "
+        f"FOR Year {target_year}: \n\t\t\t\t\t\t\t\tGot {len(df_acc)} locations "
         f"from the TABLE {table_name} containing {len(df_acc)} accidents."
     )
 
