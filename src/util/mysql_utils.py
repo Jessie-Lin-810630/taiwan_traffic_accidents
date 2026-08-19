@@ -128,9 +128,15 @@ def _create_engine(database: str | None = None) -> Engine:
 def get_engine_to_mysql(database: str | None = None) -> Engine:
     """取得連往指定資料庫的 SQLAlchemy Engine，同一資料庫在行程內共用同一個。
 
-    本專案 Engine 的連線池生命週期與行程基本上等長，因此不需要（也不應該）由呼叫端
-    `dispose()`。只有 `_ENGINES` 中還沒有該資料庫的 Engine 時才會真的建立，
-    並留下一行 info 日誌。
+    只有 `_ENGINES` 中還沒有該資料庫的 Engine 時才會真的建立，並留下一行 info 日誌。
+    連線池的生命週期與行程等長，因此不需要（也不應該）由呼叫端 `dispose()`，行程的詮釋見下方：
+
+    根據本專案的兩個執行環境，有兩種詮釋：
+
+    - Airflow 容器：本專案使用 LocalExecutor，一個 task 就是一個行程。同一條 DAG 的每個 task 各有
+      一份自己的 `_ENGINES`，task 結束行程就消滅，連線池亦跟著回收。共用只發生在單一 task 內部的多次呼叫。
+    - Streamlit 容器：一個容器實例就是一個常駐行程，Engine 會被所有分頁與所有
+      使用者的 session 共用，切換分頁不會重建，只有容器重啟或水平擴充時，才會重建連線池。
 
     Args:
         database (str | None): 要連往的資料庫名稱；`None` 代表不指定資料庫
