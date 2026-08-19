@@ -130,7 +130,7 @@ def l_fact_hourly_weather(
         )
 
         total_rows += len(df_transformed)
-        logger.success(
+        logger.info(
             f"==== Batch {batch_no} finished in which {len(df_transformed)} rows were treated. "
             f"Accumulative treated rows so far {total_rows}. ===="
         )
