@@ -694,7 +694,7 @@ def get_ai_analysis(
         """
     res = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     content = res.choices[0].message.content
 
