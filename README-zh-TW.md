@@ -34,7 +34,9 @@
 交通事故資料、Open-Meteo 的天氣觀測資料、維基百科與 Google Maps 的夜市資訊，透過 7 條 Airflow
 DAG 寫入 MySQL 的星狀綱要 (star schema)，另以 1 條 DAG 寫入 Redis 記憶體資料庫，提升前端 Streamlit 網頁呈現**夜市周邊的交通安全因子與風險層級**分析。
 
-> [Live Demo](https://tjr104-tw-traffic-app-dev-219985522999.asia-east1.run.app/)
+> [Demo Video on YouTube](https://youtu.be/k4kayfD-x-k)
+
+> [Live Implementation](https://tjr104-tw-traffic-app-dev-219985522999.asia-east1.run.app/)
 
 **運作概念**：
 後端服務（含 MySQL、Redis、Airflow）以 Docker Compose 啟動後跑在 GCP VM 上，前端
@@ -50,7 +52,7 @@ Streamlit 打包成獨立 image 部署到 Cloud Run Service，透過 direct VPC 
 永久性故障，只對暫時性故障重試，使額度不會浪費在重試必然失敗的請求上。
 
 - 車禍地點天氣數據 ETL 則採**增量載入**，因為 Open-Meteo API 有請求額度限制，且因應事故 ETL 資料筆數
-預計 4 百萬筆，若每次執行都全量載入會無端浪費額度。為實踐增量載入，將存下的氣象數據的
+預計 480+ 萬筆，若每次執行都全量載入會無端浪費額度。為實踐增量載入，將存下的氣象數據的
 部分（「觀測點 × 月」）抽為 GCS 物件路徑名稱，以路徑名作為任務進度表，當 DAG 續跑或重試
 時，只對缺失的路徑檔請求 API。清洗任務則透過**預先定義的同一支網格進位函式**，確保存入 MySQL 的天氣數據與事故數據可以對應到同一個地理網格、顆粒度相同，兩表 JOIN 永遠有交集。
 此外，此設計也有助於減少 API 請求次數，一年約30萬~40萬計的事故座標進位後，簡化到千個觀測點，打 API 時也就相當於對應到數千的地理網格。

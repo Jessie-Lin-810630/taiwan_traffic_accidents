@@ -45,7 +45,9 @@ Airflow DAGs, with 1 more DAG writing into the Redis in-memory database, so that
 Streamlit frontend can present the analysis of **traffic safety factors and risk levels
 around night markets**.
 
-> [Live Demo](https://tjr104-tw-traffic-app-dev-219985522999.asia-east1.run.app/)
+> [Demo Video on YouTube](https://youtu.be/k4kayfD-x-k)
+
+> [Live Implementation](https://tjr104-tw-traffic-app-dev-219985522999.asia-east1.run.app/)
 
 **How it works**:
 The backend services (MySQL, Redis and Airflow) run on a GCP VM, started with Docker
@@ -72,7 +74,7 @@ distinguishes transient from permanent failures and retries only the transient o
 that quota is not wasted on retrying requests that are bound to fail.
 
 - The weather ETL for accident locations uses **incremental load**, because the Open-Meteo
-API has a request quota and the accident dataset is expected to reach 4 million rows, so a
+API has a request quota and the accident dataset is expected to reach at least 4.8 million rows, so a
 full load on every run would waste quota for nothing. To make the incremental load work,
 part of the stored weather data (the "observation point × month" pair) is encoded into the
 GCS object path, and the path listing itself serves as the progress table: when a DAG
