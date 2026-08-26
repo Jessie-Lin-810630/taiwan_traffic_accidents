@@ -48,10 +48,15 @@ def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int
 
 
 def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
-    """讀取夜市地理資訊 JSON，取出名稱含「夜市」或「商圈」的項目。
+    """讀取夜市地理資訊 JSON，驗證必要欄位後取出名稱含「夜市」或「商圈」的項目。
 
     查詢時是拿維基百科的名稱去 Google 地圖比對，回應中難免混進不是夜市的地點，
     這一步用名稱把它們濾掉。
+
+    過濾之前先驗證兩層：每個項目要有 `result` 欄位，`result` 底下要有名稱、地址、
+    座標、營業時間這四個必要欄位。缺一個記 `warning` 並繼續，缺的比例超過三成就記
+    `error` 並拋出，因為那代表來源的結構已經變了，繼續跑只會把整批空值寫進
+    資料表。`rating` 與 `url` 不是必要欄位。
 
     Args:
         jsonfile_path (str): 夜市地理資訊 JSON 的路徑。
@@ -73,17 +78,69 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
     Raises:
         FileNotFoundError: 路徑不存在。
         json.JSONDecodeError: 檔案不是合法的 JSON。
-        KeyError: 回應項目缺少 `result` 欄位。
+        ValueError: 有項目缺的必要欄位比例超過門檻。
+
+    Notes:
+        欄位驗證的分層、門檻與時機參考 ADR-0019。
     """
+    # 一個項目要有 result，result 底下要有這四個欄位，缺的比例超過門檻就拋出。
+    # rating 與 url 不列入必要：實測缺欄率 3.4% 與 0%，冷門夜市本來就可能沒有評分。
+    required_result_column = "result"
+    required_columns = ("name", "formatted_address", "geometry", "opening_hours")
+    missing_ratio_threshold = 0.3
+
     jsonfile_path = Path(jsonfile_path)
     with jsonfile_path.open(mode="r", encoding="utf-8") as jf:
         readout = json.load(
             jf
         )  # list with length of ~472, an element = a possible night market
-        night_market_info_list = []
-        for r in readout:  # r = a night market; r["result"] = a_night_market_info
-            if "夜市" in r["result"].get("name") or "商圈" in r["result"].get("name"):
-                night_market_info_list.append(r["result"])
+
+    night_market_info_list = []
+    missing_counts = {column: 0 for column in required_columns}
+    over_threshold_count = 0
+
+    for r in readout:  # r = a night market; r["result"] = a_night_market_info
+        a_night_market_info = r.get(required_result_column)
+
+        # 沒有 result 就無從談底下那四個必要欄位，視為四個全缺。
+        if a_night_market_info is None:
+            over_threshold_count += 1
+            for column in required_columns:
+                missing_counts[column] += 1
+            continue
+
+        missing_columns = [c for c in required_columns if c not in a_night_market_info]
+        for column in missing_columns:
+            missing_counts[column] += 1
+
+        if len(missing_columns) / len(required_columns) > missing_ratio_threshold:
+            over_threshold_count += 1
+            continue
+
+        # 缺 name 的項目無從判斷是不是夜市，會在這裡自然被濾掉。
+        nightmarket_name = a_night_market_info.get("name") or ""
+        if "夜市" in nightmarket_name or "商圈" in nightmarket_name:
+            night_market_info_list.append(a_night_market_info)
+
+    # 彙總後只記一次
+    missing_summary = {k: v for k, v in missing_counts.items() if v}
+
+    if over_threshold_count:
+        message = (
+            f"{jsonfile_path} 共 {len(readout)} 筆，其中 {over_threshold_count} 筆"
+            f"缺少的必要欄位超過 {missing_ratio_threshold:.0%}，"
+            f"各欄位缺少的筆數為 {missing_summary}，"
+            f"請檢查 Google Maps 的回應結構是否已變動"
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+    if missing_summary:
+        logger.warning(
+            f"{jsonfile_path} 共 {len(readout)} 筆，各欄位缺少的筆數為 "
+            f"{missing_summary}，未超過門檻，這些欄位將使用預設值"
+        )
+
     return night_market_info_list
 
 

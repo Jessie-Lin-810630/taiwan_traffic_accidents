@@ -1,6 +1,12 @@
-"""驗證夜市清洗的七支私有函式，以及它們被組裝成資料列的方式。
+"""驗證夜市 JSON 的讀取契約，以及清洗的七支私有函式。
 
-這七支都是純轉換函式，沒有故障語意可釘，因此測試集中在四件事：
+讀取契約要釘住的是失敗語意（ADR-0019）：
+
+- 缺一個必要欄位（25%）記 warning 並繼續，缺兩個（50%）記 error 並拋 `ValueError`
+- 缺 `result` 欄位視為四個必要欄位全缺，走同一條門檻，不再拋難懂的 `KeyError`
+- 驗證在名稱過濾之前，母體是全部項目而非過濾後的夜市
+
+七支清洗函式都是純轉換函式，沒有故障語意可釘，測試集中在四件事：
 
 - 快樂路徑：正常的 Google Maps 回應片段被拆成正確的欄位
 - 缺漏填補：來源缺欄時填的是各自約定的值（`None` 或說明字串），不是空字串
@@ -11,9 +17,11 @@
 六支，並把「對整個夜市都相同」的欄位貼到每一列上。
 """
 
+import json
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 from src.task.e_crawling_nightmarket import cities_per_region
 from src.task.t_fact_night_markets import (
@@ -24,6 +32,7 @@ from src.task.t_fact_night_markets import (
     _clean_night_market_geometry_location,
     _clean_night_market_name,
     _t_clean_one_night_market,
+    read_googlemap_responsed_json,
 )
 
 # 一份完整的 Google Maps 回應片段，欄位齊全、營業時間走狀況 E
@@ -50,6 +59,149 @@ A_NIGHT_MARKET = {
 def _periods(*periods):
     """把幾段 periods 包成 `_clean_business_datetime()` 吃的形狀。"""
     return {"opening_hours": {"periods": list(periods)}}
+
+
+def _write_json(tmp_path, results, name="night_markets.json"):
+    """把幾份 `result` 包成 Places API 回應的形狀並寫成檔案。
+
+    傳 `None` 代表這個項目連 `result` 都沒有，用來模擬結構已變的回應。
+    """
+    items = [
+        {"status": "OK"} if r is None else {"status": "OK", "result": r}
+        for r in results
+    ]
+    path = tmp_path / name
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    return str(path)
+
+
+def _without(*keys):
+    """複製一份完整夜市資料，去掉指定的欄位。"""
+    return {k: v for k, v in A_NIGHT_MARKET.items() if k not in keys}
+
+
+class Test讀取與欄位驗證:
+    """read_googlemap_responsed_json 的失敗語意，參考 ADR-0019。"""
+
+    def test_欄位齊全時取出含夜市或商圈的項目(self, tmp_path):
+        """快樂路徑：驗證通過，名稱過濾照舊運作。"""
+        path = _write_json(
+            tmp_path,
+            [
+                A_NIGHT_MARKET,
+                dict(A_NIGHT_MARKET, name="逢甲商圈"),
+                dict(A_NIGHT_MARKET, name="臺北車站"),
+            ],
+        )
+
+        got = read_googlemap_responsed_json(path)
+
+        assert [r["name"] for r in got] == ["士林夜市", "逢甲商圈"]
+
+    def test_欄位齊全時不發_warning(self, tmp_path, caplog):
+        """沒有缺欄就不該產生噪音。"""
+        path = _write_json(tmp_path, [A_NIGHT_MARKET])
+
+        with caplog.at_level("WARNING"):
+            read_googlemap_responsed_json(path)
+
+        assert caplog.text == ""
+
+    def test_缺一個必要欄位記_warning_但不中止(self, tmp_path, caplog):
+        """缺 1 個 = 25%，未達 30% 門檻，這一筆照常留下。"""
+        path = _write_json(tmp_path, [_without("opening_hours")])
+
+        with caplog.at_level("WARNING"):
+            got = read_googlemap_responsed_json(path)
+
+        assert len(got) == 1
+        assert "opening_hours" in caplog.text
+
+    def test_缺兩個必要欄位就拋出(self, tmp_path):
+        """缺 2 個 = 50%，超過門檻。這是 ADR-0019 的核心判準。"""
+        path = _write_json(tmp_path, [_without("opening_hours", "geometry")])
+
+        with pytest.raises(ValueError):
+            read_googlemap_responsed_json(path)
+
+    def test_缺兩個必要欄位時記_error_而不是_warning(self, tmp_path, caplog):
+        """Schema 變動重試無效，是永久性故障（ADR-0006 第 5 條）。"""
+        path = _write_json(tmp_path, [_without("opening_hours", "geometry")])
+
+        with caplog.at_level("WARNING"), pytest.raises(ValueError):
+            read_googlemap_responsed_json(path)
+
+        assert [r.levelname for r in caplog.records] == ["ERROR"]
+
+    def test_沒有_result_的項目視為四個必要欄位全缺(self, tmp_path):
+        """`{"status": "OK"}` 這種回應走同一條門檻，不再拋難懂的 KeyError。"""
+        path = _write_json(tmp_path, [None, None, None])
+
+        with pytest.raises(ValueError) as excinfo:
+            read_googlemap_responsed_json(path)
+
+        message = str(excinfo.value)
+        for key in ("name", "formatted_address", "geometry", "opening_hours"):
+            assert key in message
+
+    def test_錯誤訊息帶得出診斷資訊(self, tmp_path):
+        """訊息要能回答「幾筆出事、缺哪些欄位」，否則等於沒有訊息。"""
+        path = _write_json(tmp_path, [_without("name", "geometry"), A_NIGHT_MARKET])
+
+        with pytest.raises(ValueError) as excinfo:
+            read_googlemap_responsed_json(path)
+
+        message = str(excinfo.value)
+        assert "共 2 筆" in message
+        assert "1 筆" in message
+        assert "name" in message and "geometry" in message
+
+    def test_rating_與_url_不算必要欄位(self, tmp_path, caplog):
+        """這兩個不列入必要，冷門夜市本來就可能沒有評分。"""
+        path = _write_json(tmp_path, [_without("rating", "url")])
+
+        with caplog.at_level("WARNING"):
+            got = read_googlemap_responsed_json(path)
+
+        assert len(got) == 1
+        assert caplog.text == ""
+
+    def test_驗證發生在名稱過濾之前(self, tmp_path):
+        """母體是全部項目，非夜市的項目結構壞掉照樣要攔下來。
+
+        若驗證放在過濾之後，這個非夜市項目會先被丟掉，schema 已變的事實就被吞掉了。
+        """
+        broken_non_night_market = {
+            k: v
+            for k, v in A_NIGHT_MARKET.items()
+            if k not in ("opening_hours", "geometry")
+        }
+        broken_non_night_market["name"] = "臺北車站"
+        path = _write_json(tmp_path, [A_NIGHT_MARKET, broken_non_night_market])
+
+        with pytest.raises(ValueError):
+            read_googlemap_responsed_json(path)
+
+    def test_缺_name_的項目被濾掉而不是拋_TypeError(self, tmp_path):
+        """缺 name 只有 25%，未達門檻；但沒有名字就無從判斷是不是夜市。
+
+        舊實作會在 `"夜市" in None` 拋 TypeError。
+        """
+        path = _write_json(tmp_path, [_without("name"), A_NIGHT_MARKET])
+
+        got = read_googlemap_responsed_json(path)
+
+        assert [r["name"] for r in got] == ["士林夜市"]
+
+    def test_掃完全部才拋而不是遇到第一筆就中斷(self, tmp_path):
+        """訊息要涵蓋全部超標的筆數，不能只報第一筆（ADR-0019 決策六）。"""
+        broken = _without("name", "geometry")
+        path = _write_json(tmp_path, [broken, A_NIGHT_MARKET, broken])
+
+        with pytest.raises(ValueError) as excinfo:
+            read_googlemap_responsed_json(path)
+
+        assert "2 筆" in str(excinfo.value)
 
 
 class Test名稱清理:
@@ -136,7 +288,7 @@ class Test地址拆解:
         }
 
     def test_完全沒有地址欄位時不炸掉(self):
-        """來源缺 formatted_address 時走預設值，整支仍要回傳完整的五個鍵。"""
+        """來源缺 formatted_address 時走預設值，整支仍要回傳完整的五個欄位。"""
         got = _clean_night_market_address({}, cities_per_region)
 
         assert got["area_road"] == "無地址資訊"
