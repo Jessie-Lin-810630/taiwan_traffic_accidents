@@ -104,6 +104,7 @@ def night_markets_pipeline():
             None: 本 task 只有副作用。
 
         Raises:
+            ValueError: JSON 有項目缺的必要欄位超過門檻。
             pymysql.MySQLError: 任一批寫入失敗。
         """
         nm_info_lst = read_googlemap_responsed_json(responsed_file_path)

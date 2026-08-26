@@ -147,6 +147,7 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 | 0016 | 熱點圖的減量在 SQL 完成，而非 pandas |
 | 0017 | 部署以測試通過為前提 |
 | 0018 | 事故轉換階段的資料庫名稱由呼叫端傳入 |
+| 0019 | 夜市 JSON 的必要欄位在讀取時驗證 |
 
 ## 已知狀態
 
