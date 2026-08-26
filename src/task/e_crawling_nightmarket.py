@@ -449,7 +449,7 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
         logger.info(f"====正在查詢：{name} 的place ID...====")
         place_id = search_place_id(name)
         if not place_id:
-            logger.info(f"找不到 {name} 的place ID")
+            logger.warning(f"找不到 {name} 的place ID")
             failure_id_list.append(name)
             continue
 
@@ -457,7 +457,7 @@ def e_crawling_nightmarket(csvfile_path: str | Path) -> str:
         details = get_place_details(place_id)
 
         if not details:
-            logger.info(f"找不到{name}的地理位置細節")
+            logger.warning(f"找不到{name}的地理位置細節")
             failure_detail_list.append(name)
             continue
 
