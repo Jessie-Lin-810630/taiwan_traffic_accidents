@@ -24,10 +24,22 @@ LOADER_DECLARATIONS = [
         "fact_accident_main",
         ["accident_type_id", "death_count", "injury_count"],
     ),
+    # 唯一鍵三欄（緯度、經度、營業星期）不得列入 update_columns，參考 ADR-0014
     (
         "l_fact_night_markets",
         "fact_night_markets",
-        ["updated_on", "business_hours_closing", "business_hours_opening"],
+        [
+            "updated_on",
+            "business_hours_closing",
+            "business_hours_opening",
+            "northeast_latitude",
+            "northeast_longitude",
+            "southwest_latitude",
+            "southwest_longitude",
+            "url_to_googlemap",
+            "googlemap_rating",
+            "nightmarket_name",
+        ],
     ),
 ]
 
