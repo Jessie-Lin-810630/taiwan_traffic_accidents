@@ -110,7 +110,7 @@ TRAFFIC_ACCIDENT_TABLES = {
                                         REFERENCES `dim_lane_design`(`lane_design_id`)
                                     ) CHARSET=utf8mb4 COMMENT='車禍案件環境事實表';
                             """,
-    # row_hash 在 T 階段用 accident_id、party_sequence、age、gender、impact_point_minor_other 湊出
+    # row_hash 在 T 階段用 accident_id、party_sequence、age、gender、impact_point_minor_other、cause_analysis_minor_individual 湊出
     "fact_accident_human": """CREATE TABLE IF NOT EXISTS `fact_accident_human` (
                                     `person_id` BIGINT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '涉案人ID',
                                     `accident_id` VARCHAR(24) NOT NULL COMMENT '車禍案件編號',
