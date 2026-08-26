@@ -102,6 +102,8 @@ def find_download_links(urls: list[str], headers: dict) -> dict[str, str]:
                 .text.strip()
                 .replace(".zip", "")
             )
+        else:
+            logger.warning(f"{url} 選不到檔名區塊，page_topic 為 None")
         for a_tag in soup.find_all("a", title=re.compile("下載檔案")):
             href = a_tag.get("href")
             available_file_type = a_tag.get("title").replace("下載檔案", "").strip()
@@ -190,7 +192,7 @@ def e_crawling_historical_traffic_accident(
     historical_download_links = find_download_links(historical_years_urls, headers)
     csvfile_paths_historical = []
     for download_link, (file_type, page_topic) in historical_download_links.items():
-        zipfile_name = _timestamped_name(page_topic, ".zip")
+        zipfile_name = _timestamped_name(page_topic or "Untitled", ".zip")
         csvfile_paths_a_hist_year = download_and_extract_zip(
             download_link,
             headers,
