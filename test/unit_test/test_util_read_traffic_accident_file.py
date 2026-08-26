@@ -34,6 +34,16 @@ TRANSFORMS = [
     ("t_fact_accident_human", fact_accident_human_col_origin_map),
 ]
 
+# fact 三支會查資料庫，簽名多一個 database（ADR-0018）；dim 三支不查，沒有這個參數
+TRANSFORMS_NEEDING_DATABASE = {
+    "t_fact_accident_main",
+    "t_fact_accident_env",
+    "t_fact_accident_human",
+}
+
+# 測試不連 MySQL，這個名稱只用來確認它有原樣傳到查詢函式
+TEST_DATABASE = "測試用資料庫"
+
 # 舊表頭（111～113 年度）缺少的那一欄，114 年度才新增
 COLUMN_ADDED_IN_2025 = "共享經濟或外送平台的名稱"
 
@@ -159,9 +169,12 @@ class Test空輸入:
         """空 pathlist 代表上游沒抓到檔案，不得回空 DataFrame（ADR-0003）。"""
         module = importlib.import_module(f"src.task.{module_name}")
         transform = getattr(module, module_name)
+        args = (
+            ([], TEST_DATABASE) if module_name in TRANSFORMS_NEEDING_DATABASE else ([],)
+        )
 
         with pytest.raises(ValueError, match="上游未產出任何 CSV 檔"):
-            transform([])
+            transform(*args)
 
 
 class Test維度表端到端:
@@ -246,7 +259,7 @@ class Test事實表端到端:
         ):
             from src.task.t_fact_accident_main import t_fact_accident_main
 
-            df = t_fact_accident_main([str(path)])
+            df = t_fact_accident_main([str(path)], TEST_DATABASE)
 
         assert len(df) == 1
         row = df.iloc[0]
@@ -285,7 +298,7 @@ class Test事實表端到端:
         ):
             from src.task.t_fact_accident_human import t_fact_accident_human
 
-            df = t_fact_accident_human([str(path)])
+            df = t_fact_accident_human([str(path)], TEST_DATABASE)
 
         row_out = df.iloc[0]
         assert row_out["hit_and_run"] == 1
@@ -336,9 +349,51 @@ class Test事實表端到端:
         ):
             from src.task.t_fact_accident_env import t_fact_accident_env
 
-            df = t_fact_accident_env([str(path)])
+            df = t_fact_accident_env([str(path)], TEST_DATABASE)
 
         row_out = df.iloc[0]
         assert row_out["weather_condition"] == "晴"
         assert row_out["speed_limit_primary_party"] == 50
         assert row_out["accident_id"] == "2024010100000001"
+
+
+class Test資料庫名稱由呼叫端決定:
+    """fact 三支查資料庫時，用的是呼叫端傳進來的名稱（ADR-0018）。"""
+
+    # 第一次查詢之前的清洗需要這些欄位是可解析的值，其餘欄位填「甲」即可
+    EXTRA_BEFORE_FIRST_QUERY = {
+        "t_fact_accident_main": {"死亡受傷人數": "死亡0;受傷2"},
+        "t_fact_accident_env": {"速限-第1當事者": "50"},
+        "t_fact_accident_human": {"當事者順位": "1"},
+    }
+
+    @pytest.mark.parametrize(
+        "module_name, column_map",
+        [
+            ("t_fact_accident_main", fact_accident_main_col_origin_map),
+            ("t_fact_accident_env", fact_accident_env_col_origin_map),
+            ("t_fact_accident_human", fact_accident_human_col_origin_map),
+        ],
+    )
+    def test_傳進來的資料庫名稱會原樣送到查詢函式(
+        self, module_name, column_map, tmp_path
+    ):
+        """三支都不得再用寫死的資料庫名稱 —— 讀與寫必須指向同一個資料庫。
+
+        只驗第一次查詢：查詢在第一次就被擋下，能證明名稱有傳到就夠了，
+        不需要把整條 transform 跑完。
+        """
+        path = Test事實表端到端()._accident_csv(
+            tmp_path, column_map, extra=self.EXTRA_BEFORE_FIRST_QUERY[module_name]
+        )
+        module = importlib.import_module(f"src.task.{module_name}")
+
+        with patch.object(
+            module,
+            "get_table_from_sqlserver",
+            side_effect=RuntimeError("停在第一次查詢"),
+        ) as mock_query:
+            with pytest.raises(RuntimeError):
+                getattr(module, module_name)([str(path)], TEST_DATABASE)
+
+        assert mock_query.call_args.kwargs["database"] == TEST_DATABASE

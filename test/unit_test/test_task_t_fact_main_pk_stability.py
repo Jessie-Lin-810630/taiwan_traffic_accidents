@@ -60,7 +60,7 @@ def _run(path):
     ):
         from src.task.t_fact_accident_main import t_fact_accident_main
 
-        df = t_fact_accident_main([str(path)])
+        df = t_fact_accident_main([str(path)], "測試用資料庫")
     return dict(zip(df["accident_time"], df["accident_id"]))
 
 
