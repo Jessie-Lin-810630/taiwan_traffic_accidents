@@ -2,7 +2,7 @@
 
 輸入是 `e_crawling_nightmarket()` 產出的 Google Maps 回應 JSON。清洗分成幾支
 彼此獨立的小函式，各自負責一個面向（名稱、地址、座標、營業時間、評分、地圖
-網址），再由 `t_clean_one_night_market()` 組成一個夜市的資料列。
+網址），再由 `_t_clean_one_night_market()` 組成一個夜市的資料列。
 
 一個夜市會展開成多列，因為營業時間是按星期拆開的：資料表的唯一鍵是
 「緯度 + 經度 + 營業星期」，一天一列。跨夜營業會被拆成當天到 23:59:59 與隔天
@@ -87,7 +87,7 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
     return night_market_info_list
 
 
-def clean_night_market_name(a_night_market_info: dict) -> dict[str]:
+def _clean_night_market_name(a_night_market_info: dict) -> dict[str]:
     """取出並清理一個夜市的名稱。
 
     Google 地圖的名稱常帶括號補述（例如「基隆廟口夜市(仁三路)」），若括號內沒有
@@ -116,7 +116,7 @@ def clean_night_market_name(a_night_market_info: dict) -> dict[str]:
     return cleaned_night_market_name
 
 
-def clean_night_market_address(
+def _clean_night_market_address(
     a_night_market_info: dict, cities_per_region: dict
 ) -> dict[str]:
     """從格式化地址拆出地區、縣市、行政區、郵遞區號與街道地址。
@@ -225,7 +225,7 @@ def clean_night_market_address(
     return cleaned_address
 
 
-def clean_night_market_geometry_location(
+def _clean_night_market_geometry_location(
     a_night_market_info: dict,
 ) -> dict[float | None]:
     """取出一個夜市的中心座標與東北、西南兩個邊界端點座標。
@@ -301,7 +301,7 @@ def clean_night_market_geometry_location(
     return find_long_lat
 
 
-def clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
+def _clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
     """把一週的營業時段整理成「一天一列」的形式。
 
     來源的每個時段有開始與結束兩個時間點，跨夜時兩者落在不同天。為了讓資料
@@ -443,7 +443,7 @@ def clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
     return find_business_datetime
 
 
-def clean_googlemap_rating(a_night_market_info: dict) -> dict[float]:
+def _clean_googlemap_rating(a_night_market_info: dict) -> dict[float]:
     """取出一個夜市的 Google 地圖評分。
 
     Args:
@@ -461,7 +461,7 @@ def clean_googlemap_rating(a_night_market_info: dict) -> dict[float]:
     return cleaned_rating
 
 
-def clean_googlemap_url(a_night_market_info: dict) -> dict[str]:
+def _clean_googlemap_url(a_night_market_info: dict) -> dict[str]:
     """取出一個夜市在 Google 地圖上的網址。
 
     Args:
@@ -477,7 +477,7 @@ def clean_googlemap_url(a_night_market_info: dict) -> dict[str]:
     return cleaned_url
 
 
-def t_clean_one_night_market(
+def _t_clean_one_night_market(
     a_night_market_info: dict, cities_per_region: dict
 ) -> list[dict]:
     """把各支清洗函式的結果組成一個夜市的資料列。
@@ -516,12 +516,12 @@ def t_clean_one_night_market(
     """
     nm = a_night_market_info
 
-    cleaned_night_market_name = clean_night_market_name(nm)  # dict[str]
-    clean_address = clean_night_market_address(nm, cities_per_region)  # dict[str]
-    cleaned_night_market_loc = clean_night_market_geometry_location(nm)  # dict[float]
-    cleaned_business_datetime = clean_business_datetime(nm)  # dict[list[str]]
-    cleaned_rating = clean_googlemap_rating(nm)  # dict[float]
-    cleaned_url = clean_googlemap_url(nm)  # dict[str]
+    cleaned_night_market_name = _clean_night_market_name(nm)  # dict[str]
+    clean_address = _clean_night_market_address(nm, cities_per_region)  # dict[str]
+    cleaned_night_market_loc = _clean_night_market_geometry_location(nm)  # dict[float]
+    cleaned_business_datetime = _clean_business_datetime(nm)  # dict[list[str]]
+    cleaned_rating = _clean_googlemap_rating(nm)  # dict[float]
+    cleaned_url = _clean_googlemap_url(nm)  # dict[str]
 
     # 整併成DataFrame，再to_dict(速度會比最後不斷concat多個dataframe快)
     df = pd.DataFrame(cleaned_business_datetime)
@@ -577,7 +577,7 @@ def t_fact_night_markets(
         all_records = []
         nms = night_market_info_list[i : i + size]
         for nm in nms:
-            records_a_nm = t_clean_one_night_market(nm, cities_per_region)
+            records_a_nm = _t_clean_one_night_market(nm, cities_per_region)
             all_records.extend(
                 records_a_nm
             )  # list.extend(list[dict]) => list[dict, dict]

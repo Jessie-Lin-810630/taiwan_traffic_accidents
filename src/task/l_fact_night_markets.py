@@ -18,7 +18,7 @@ def l_fact_night_markets(
 
     Args:
         df_fact_night_markets (pandas.DataFrame): 待寫入的資料，欄位名須與資料表一致，
-            即 `t_clean_one_night_market()` 展開後的結果。
+            即 `_t_clean_one_night_market()` 展開後的結果。
         database (str | None): 目標資料庫名稱。
 
     Raises:
