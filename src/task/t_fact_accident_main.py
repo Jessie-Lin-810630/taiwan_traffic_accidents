@@ -13,7 +13,7 @@ from src.util.table_column_map import fact_accident_main_col_origin_map
 logger = get_logger(__name__)
 
 
-def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
+def t_fact_accident_main(csvfile_paths: list[str], database: str) -> pd.DataFrame:
     """從事故 CSV 清洗出事故主檔事實資料，一件事故一列。
 
     逐檔讀入後做四件清洗：日期轉成 `YYYY-MM-DD`、時間補零並轉成 `HH:MM:SS`、
@@ -28,6 +28,7 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
 
     Args:
         csvfile_paths (list[str]): 事故 CSV 的路徑清單，來自 `e_*` 階段的產出。
+        database (str): 要查詢維度表的資料庫名稱，由呼叫端指定。
 
     Returns:
         pandas.DataFrame: 事故主檔資料，空值已轉成 `None` 以便寫入 MySQL，形如：
@@ -43,7 +44,8 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
 
     Notes:
         空清單視為故障參考 ADR-0003，中途查維度表取外鍵是刻意的設計，參考 ADR-0010，
-        主鍵由事故內容決定而非單次 run 的排序名次參考 ADR-0014。
+        主鍵由事故內容決定而非單次 run 的排序名次參考 ADR-0014，
+        資料庫名稱由呼叫端傳入參考 ADR-0018。
     """
     if not csvfile_paths:
         raise ValueError("csvfile_paths 為空，上游未產出任何 CSV 檔")
@@ -85,7 +87,7 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
 
     # 找day_id關聯
     query = "SELECT day_id, accident_date FROM dim_accident_day;"
-    df_dim_accident_day = get_table_from_sqlserver(query, database="traffic_accidents")
+    df_dim_accident_day = get_table_from_sqlserver(query, database=database)
     df_dim_accident_day["accident_date"] = df_dim_accident_day["accident_date"].astype(
         str
     )
@@ -99,7 +101,7 @@ def t_fact_accident_main(csvfile_paths: list[str]) -> pd.DataFrame:
 
     # 找accident_type_id關聯
     query = "SELECT * FROM dim_accident_type;"
-    df_dim_accident_type = get_table_from_sqlserver(query, database="traffic_accidents")
+    df_dim_accident_type = get_table_from_sqlserver(query, database=database)
     df_merged = df_merged.merge(
         df_dim_accident_type,
         how="inner",

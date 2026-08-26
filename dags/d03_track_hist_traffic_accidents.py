@@ -55,6 +55,8 @@ default_args = {
 def traffic_accidents_pipeline_hist():
     """串接歷年事故資料的抓取、轉換與載入五個 task。"""
     database = os.getenv("MYSQL_DATABASE")
+    if not database:
+        raise ValueError("未設定 MYSQL_DATABASE，請檢查環境變數設置")
 
     @task(
         retries=3,
@@ -125,7 +127,7 @@ def traffic_accidents_pipeline_hist():
             ValueError: 路徑清單為空。
             pymysql.MySQLError: 寫入失敗（含外鍵約束不成立）。
         """
-        t_done_main = t_fact_accident_main(pathlist)
+        t_done_main = t_fact_accident_main(pathlist, database)
         l_fact_accident_main(t_done_main, database)
         return None
 
@@ -175,9 +177,9 @@ def traffic_accidents_pipeline_hist():
         Notes:
             冪等性保證說明請參考 ADR-0015 決策四。
         """
-        t_done_human = t_fact_accident_human(pathlist)
+        t_done_human = t_fact_accident_human(pathlist, database)
         l_fact_accident_human(t_done_human, database)
-        t_done_env = t_fact_accident_env(pathlist)
+        t_done_env = t_fact_accident_env(pathlist, database)
         l_fact_accident_env(t_done_env, database)
         return None
 
