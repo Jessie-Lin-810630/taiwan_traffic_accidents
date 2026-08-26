@@ -99,7 +99,7 @@ class Test讀取與欄位驗證:
         assert [r["name"] for r in got] == ["士林夜市", "逢甲商圈"]
 
     def test_欄位齊全時不發_warning(self, tmp_path, caplog):
-        """沒有缺欄就不該產生噪音。"""
+        """欄位齊全時不該留下任何 warning。"""
         path = _write_json(tmp_path, [A_NIGHT_MARKET])
 
         with caplog.at_level("WARNING"):

@@ -1,16 +1,4 @@
-"""Transform 階段：清洗夜市地理資訊 JSON，產生夜市事實資料並寫入資料庫。
-
-輸入是 `e_crawling_nightmarket()` 產出的 Google Maps 回應 JSON。清洗分成幾支
-彼此獨立的小函式，各自負責一個面向（名稱、地址、座標、營業時間、評分、地圖
-網址），再由 `_t_clean_one_night_market()` 組成一個夜市的資料列。
-
-一個夜市會展開成多列，因為營業時間是按星期拆開的：資料表的唯一鍵是
-「緯度 + 經度 + 營業星期」，一天一列。跨夜營業會被拆成當天到 23:59:59 與隔天
-00:00:00 開始兩段。
-
-與其他 `t_*` 不同，本模組的入口 `t_fact_night_markets()` 會直接呼叫 `l_` 階段
-分批寫入資料庫，回傳 `None` 而非 DataFrame。
-"""
+"""Transform 階段：清洗夜市地理資訊 JSON，產生夜市事實資料並寫入資料庫。"""
 
 import json
 import re
@@ -25,38 +13,16 @@ from src.util.logger_crtx import get_logger
 logger = get_logger(__name__)
 
 
-def generate_night_market_serial_num_list(jsonfile_path: str | Path) -> list[int]:
-    """讀取夜市地理資訊 JSON，回傳與其筆數對應的序號清單。
-
-    供需要「有幾個夜市」而不需要內容的場合使用，例如切批次。
-
-    Args:
-        jsonfile_path (str | Path): 夜市地理資訊 JSON 的路徑。
-
-    Returns:
-        list[int]: 從 0 開始的序號清單，形如 `[0, 1, 2, ..., 471]`。
-
-    Raises:
-        FileNotFoundError: 路徑不存在。
-        json.JSONDecodeError: 檔案不是合法的 JSON。
-    """
-    jsonfile_path = Path(str(jsonfile_path))
-    with jsonfile_path.open(mode="r", encoding="utf-8") as jf:
-        readout = json.load(jf)  # list with length of ~472, an element = a night market
-    batch_list = [i for i in range(len(readout))]
-    return batch_list
-
-
 def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
     """讀取夜市地理資訊 JSON，驗證必要欄位後取出名稱含「夜市」或「商圈」的項目。
 
     查詢時是拿維基百科的名稱去 Google 地圖比對，回應中難免混進不是夜市的地點，
     這一步用名稱把它們濾掉。
 
-    過濾之前先驗證兩層：每個項目要有 `result` 欄位，`result` 底下要有名稱、地址、
-    座標、營業時間這四個必要欄位。缺一個記 `warning` 並繼續，缺的比例超過三成就記
-    `error` 並拋出，因為那代表來源的結構已經變了，繼續跑只會把整批空值寫進
-    資料表。`rating` 與 `url` 不是必要欄位。
+    - 過濾之前先驗證兩層：每個項目要有 `result` 欄位，以及 `result` 底下要有名稱、地址、
+    座標、營業時間這四個必要欄位。
+    - 缺一個記 `warning` 並繼續，缺的比例超過 30% 就記 `error` 並 raise，
+    因為那代表來源的結構可能已經變了，繼續跑只會把大量空值寫進資料表。
 
     Args:
         jsonfile_path (str): 夜市地理資訊 JSON 的路徑。
@@ -84,7 +50,6 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
         欄位驗證的分層、門檻與時機參考 ADR-0019。
     """
     # 一個項目要有 result，result 底下要有這四個欄位，缺的比例超過門檻就拋出。
-    # rating 與 url 不列入必要：實測缺欄率 3.4% 與 0%，冷門夜市本來就可能沒有評分。
     required_result_column = "result"
     required_columns = ("name", "formatted_address", "geometry", "opening_hours")
     missing_ratio_threshold = 0.3
@@ -100,15 +65,17 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
     over_threshold_count = 0
 
     for r in readout:  # r = a night market; r["result"] = a_night_market_info
+        # 1. 開始驗證欄位是否相符，先驗證 'result' 是否存在
         a_night_market_info = r.get(required_result_column)
 
-        # 沒有 result 就無從談底下那四個必要欄位，視為四個全缺。
+        # 不存在就無從檢查底下的欄位，把四個必要欄位全部計為缺少，該筆必定超過門檻。
         if a_night_market_info is None:
             over_threshold_count += 1
             for column in required_columns:
                 missing_counts[column] += 1
             continue
 
+        # 若存在 'result'，其他四個欄位個別驗證。
         missing_columns = [c for c in required_columns if c not in a_night_market_info]
         for column in missing_columns:
             missing_counts[column] += 1
@@ -117,12 +84,12 @@ def read_googlemap_responsed_json(jsonfile_path: str) -> list[dict]:
             over_threshold_count += 1
             continue
 
-        # 缺 name 的項目無從判斷是不是夜市，會在這裡自然被濾掉。
+        # 2. 驗證完畢，接著從 'name' 欄位值判斷該筆資料的地理位置是否標為夜市或相似地標。
         nightmarket_name = a_night_market_info.get("name") or ""
         if "夜市" in nightmarket_name or "商圈" in nightmarket_name:
             night_market_info_list.append(a_night_market_info)
 
-    # 彙總後只記一次
+    # 只計算「整體」欄位驗證結果
     missing_summary = {k: v for k, v in missing_counts.items() if v}
 
     if over_threshold_count:
