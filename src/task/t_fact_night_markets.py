@@ -347,7 +347,7 @@ def _clean_business_datetime(a_night_market_info: dict) -> dict[list[str]]:
     }
 
     # 格式化時間函式
-    def format_t(t):
+    def format_t(t: str) -> str:
         """把來源的四碼時間字串轉成 `HH:MM:SS`。
 
         Args:
@@ -492,7 +492,7 @@ def _t_clean_one_night_market(
     Returns:
         list[dict]: 一個夜市的多列資料，每個字典是一列，形如：
 
-            [
+                [
                 {
                     "business_days_weekday": "星期日",
                     "business_hours_opening": "16:00:00",
@@ -525,7 +525,6 @@ def _t_clean_one_night_market(
 
     # 整併成DataFrame，再to_dict(速度會比最後不斷concat多個dataframe快)
     df = pd.DataFrame(cleaned_business_datetime)
-    # print(df.head(10))
     df["nightmarket_name"] = cleaned_night_market_name["nightmarket_name"]
     df["region"] = clean_address["region"]
     df["city"] = clean_address["city"]
