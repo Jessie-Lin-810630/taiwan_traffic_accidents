@@ -148,6 +148,7 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 | 0017 | 部署以測試通過為前提 |
 | 0018 | 事故轉換階段的資料庫名稱由呼叫端傳入 |
 | 0019 | 夜市 JSON 的必要欄位在讀取時驗證 |
+| 0020 | 縣市地區歸屬統一為單一原則 |
 
 ## 已知狀態
 
@@ -163,7 +164,7 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
   `market`／`accident`／`mart`，不帶版號。寫入端、測試與 `src/pages/` 的讀取端
   皆已對齊，**Redis 裡的舊鍵仍在（TTL 10 天），要跑過一輪 `d06` 新鍵才有值**。
   此規則尚無 ADR
-- `test/unit_test/` 現有 **318 個測試**，全部走 mock，不需要 MySQL／Redis／網路／
+- `test/unit_test/` 現有 **319 個測試**，全部走 mock，不需要 MySQL／Redis／網路／
   環境變數。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用
   `test_util_*.py`；測試函式名用中文，**每個測試都要有 docstring 寫出「釘住的是什麼」**
 - ETL 產出落在 `data/raw` 與 `data/processed`（皆在 `.gitignore` 內，compose 有掛載）
