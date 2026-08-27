@@ -160,8 +160,9 @@ API key，散在 `mysql_utils` / `redis_utils` / `e_crawling_nightmarket` 的模
 - **`c_db.py` 只剩兩支函式**：`get_night_markets_table()` 與
   `get_accident_table_pedestrian_involved_in()`。其餘零呼叫者的查詢函式已刪除。
 - **Redis 快取鍵已全面改名**，規則是 `<來源表>:<業務主題>_<用途>`，來源表只能是
-  `market`／`accident`／`mart`，不帶版號。**寫入端與測試已改，`src/pages/` 的三支
-  讀取端還是舊鍵**，`d06` 重跑後前端會讀不到，需要先跑一輪再改前端。此規則尚無 ADR
+  `market`／`accident`／`mart`，不帶版號。寫入端、測試與 `src/pages/` 的讀取端
+  皆已對齊，**Redis 裡的舊鍵仍在（TTL 10 天），要跑過一輪 `d06` 新鍵才有值**。
+  此規則尚無 ADR
 - `test/unit_test/` 現有 **318 個測試**，全部走 mock，不需要 MySQL／Redis／網路／
   環境變數。命名慣例：測 `src/task/*.py` 用 `test_task_*.py`、測 `src/util/*.py` 用
   `test_util_*.py`；測試函式名用中文，**每個測試都要有 docstring 寫出「釘住的是什麼」**
