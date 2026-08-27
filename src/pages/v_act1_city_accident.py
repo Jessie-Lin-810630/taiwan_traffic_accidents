@@ -22,8 +22,7 @@ st.set_page_config(layout="wide", page_title="各縣市夜市事故比較分析"
 
 # 自定義地理排序清單
 # 將縣市與區域陣列寫死，確保在圖表下拉選單與表格繪製時，能維持習慣的地理順序
-# 修改處：將東部與東部離島合併為單一區域
-REGION_ORDER = ["北部", "中部", "南部", "東部與東部離島", "離島"]
+REGION_ORDER = ["北部", "中部", "南部", "東部與東部離島", "其他離島"]
 CITY_ORDER = [
     "臺北市",
     "新北市",
@@ -58,8 +57,8 @@ def get_real_city_data():
     """讀取全臺夜市周邊事故總表，補上地區與季別標籤。
 
     先依 `accident_id` 去重，避免跨夜市重疊區域的事故被重複計算，再算出
-    `year_quarter`（形如 `"2024 Q1"`）並依縣市對應到地區。名稱或地址含琉球、
-    蘭嶼、綠島的夜市另外歸到「東部與東部離島」，比照資料服務層的判定方式。
+    `year_quarter`（形如 `"2024 Q1"`）並依縣市對應到地區。地址含琉球的夜市另外歸到
+    「其他離島」、含蘭嶼或綠島的歸到「東部與東部離島」，比照資料服務層的判定方式。
     結果以 Streamlit 快取存在伺服器記憶體 1 小時。
 
     「快取故障」與「快取裡沒有這筆資料」是兩回事：前者拋出例外交呼叫端處理，
@@ -105,7 +104,7 @@ def get_real_city_data():
         & (df["city"] != "None")
     ]
 
-    # 將花東及外島皆對應到「東部與東部離島」
+    # 五個地區的定義見 ADR-0020
     region_map = {
         "臺北市": "北部",
         "新北市": "北部",
@@ -126,20 +125,20 @@ def get_real_city_data():
         "屏東縣": "南部",
         "花蓮縣": "東部與東部離島",
         "臺東縣": "東部與東部離島",
-        "澎湖縣": "離島",
-        "金門縣": "離島",
-        "連江縣": "離島",
+        "澎湖縣": "其他離島",
+        "金門縣": "其他離島",
+        "連江縣": "其他離島",
     }
     df["region"] = df["city"].map(region_map).fillna("其他")
 
-    # 加入附屬離島（蘭嶼、綠島、小琉球）的獨立區域劃分邏輯，將其歸入「東部與東部離島」
+    # 附屬離島的獨立區域劃分邏輯見 ADR-0020
     # 夜市主檔的行政區欄位是 area_road（不是 AdminDistrict），比照 c_data_service 用關鍵字比對
     df_market = ds.get_all_nightmarkets()
     if not df_market.empty and "area_road" in df_market.columns:
         admin_map = df_market.set_index("nightmarket_name")["area_road"].to_dict()
         df["area_road"] = df["nightmarket_name"].map(admin_map)
-        mask_islands = df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False)
-        df.loc[mask_islands, "region"] = "東部與東部離島"
+        for keyword, region in (("琉球", "其他離島"), ("蘭嶼|綠島", "東部與東部離島")):
+            df.loc[df["area_road"].str.contains(keyword, na=False), "region"] = region
 
     return df
 

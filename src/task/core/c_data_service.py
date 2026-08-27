@@ -41,8 +41,8 @@ def get_all_nightmarkets(cache_ttl: int = CACHE_TTL_SECONDS) -> pd.DataFrame:
 
     先讀 Redis 快取（鍵為 `market:night_markets_all`，且必須含 `area_road` 與
     `region` 兩欄才算命中），沒有才查 MySQL。查回來後把六個座標欄轉成數值、
-    把名稱或地址含琉球、蘭嶼、綠島的夜市歸到「東部與東部離島」，再剔除座標
-    缺漏的列。取得資料後會補寫快取，寫入失敗只記 warning。
+    把名稱或地址含琉球的夜市歸到「其他離島」、含蘭嶼或綠島的歸到「東部與東部離島」，
+    再剔除座標缺漏的列。取得資料後會補寫快取，寫入失敗只記 warning。
 
     Args:
         cache_ttl (int): 快取存活秒數，預設為 `CACHE_TTL_SECONDS`（10 天）。
@@ -52,7 +52,7 @@ def get_all_nightmarkets(cache_ttl: int = CACHE_TTL_SECONDS) -> pd.DataFrame:
 
             nightmarket_name  region  city    district  latitude   longitude   googlemap_rating
             士林夜市          北部    臺北市  士林區    25.088100  121.524300  4.2
-            小琉球夜市        東部與東部離島  屏東縣  琉球鄉  22.342100  120.371500  4.0
+            小琉球夜市        其他離島  屏東縣  琉球鄉  22.342100  120.371500  4.0
 
     Raises:
         RedisError: 讀取快取失敗。
@@ -88,15 +88,14 @@ def get_all_nightmarkets(cache_ttl: int = CACHE_TTL_SECONDS) -> pd.DataFrame:
             df["southwest_longitude"], errors="coerce"
         )
 
-        # 處理附屬離島特例強制劃分
+        # 處理附屬離島特例強制劃分，兩組的歸屬不同，見 ADR-0020。
         # str.contains(...) 在有缺值的欄位上會產生一個 object dtype 的欄，裡面混著 True、False、
         # NaN，含有 NaN 的不可以拿去作為 Mask，所以要補上 na=False，將 NaN 表示為 False，回傳 bool dtype
-        df.loc[df["area_road"].str.contains("琉球|蘭嶼|綠島", na=False), "region"] = (
-            "東部與東部離島"
-        )
-        df.loc[
-            df["nightmarket_name"].str.contains("琉球|蘭嶼|綠島", na=False), "region"
-        ] = "東部與東部離島"
+        for keyword, region in (("琉球", "其他離島"), ("蘭嶼|綠島", "東部與東部離島")):
+            df.loc[df["area_road"].str.contains(keyword, na=False), "region"] = region
+            df.loc[df["nightmarket_name"].str.contains(keyword, na=False), "region"] = (
+                region
+            )
 
         # 剔除經緯度遺漏的髒資料 (正常來說不會有)
         df_all_nm = df.dropna(subset=["latitude", "longitude"], how="any")
@@ -495,15 +494,13 @@ def aggregate_national_master(
 ):
     """聚合各批次的預計算結果成全臺總表。
 
-    先用存入 Redis 的批號 key 還原全臺夜市清單，逐夜市讀取上游函式 `cal_accidents_nearby_nightmarket()`
-    寫入的 3 公里粗篩快取資料，把落在夜市邊界方框內的事故留下並貼上夜市名稱、
-    縣市與評分。接著補上年、季、月、星期、小時等時間欄位，算出 PDI 分數
-    （死亡數乘 10 加受傷數乘 2，17 點後與 0 點的事故再乘 1.5）。
+    使用 cal_accidents_nearby_nightmarket() 所存下的對應 key 名去向 Redis 查資料
+    得到「夜市周遭車禍資訊」。並開始聚合計算，包含：接著補上年、季、月、星期、小時等時間欄位，
+    算出 PDI 分數（公式: 死亡數乘 10 加受傷數乘 2，17 點後與 0 點的事故再乘 1.5）。
 
-    產出全臺總表 `mart:pedestrian_national_master`，完成後刪掉批次鍵，
-    釋放 Redis 空間。
+    產出 Redis key 為 `mart:pedestrian_national_master` 的全臺總表，聚合不出任何資料時 raise。
 
-    聚合不出任何資料時 raise。
+    最後，刪掉函式 `get_and_slice_nightmarkets_multibatches()` 存下的 keys，以釋放 Redis 空間。
 
     Args:
         batch_keys (list[str]): 各批次夜市清單在 Redis 中的鍵。
@@ -517,15 +514,16 @@ def aggregate_national_master(
     Notes:
         不靜默結束參考 ADR-0003。
     """
-    # 先拿cache_key從Redis取所有批次的夜市資料，攤成一個大列表
+    # 先拿 cache_key 從 Redis 取所有批次的夜市資料，攤成一個大列表，它們只是拿來拼湊 key 名稱而已
     all_night_markets = []
     for nm_key in batch_keys:
         data = get_cache(nm_key)  # a list of dicts
         if data:
             all_night_markets.extend(data)  # a list of dicts
 
-    # 讀取剛剛用 cal_accidents_nearby_nightmarket() 存入 Redis 的夜市周遭車禍資訊，
-    # 透過 concat 聚合成全台大表
+    # 從大列表逐元素(即逐一夜市)拼湊出，redis cache key 名稱，此名稱是跟
+    # 函式 cal_accidents_nearby_nightmarket() 所存下的所有 key 名對齊。
+    # 用這個還原的 key 去查 redis 中的"夜市周遭車禍資訊"。
     all_dfs = []
     for nm in all_night_markets:
         nm_lat, nm_lon = nm["lat"], nm["lon"]
@@ -537,7 +535,8 @@ def aggregate_national_master(
         if data is not None:
             df = pd.DataFrame(data)
             if not df.empty:
-                # 從3 km周遭內再保留，有落在 "夜市範圍內"+"夜市周圍500 m之方框內"的事故
+                # df 代表的是該單一夜市周遭 3 km 的事故，以下要做的事情是:
+                # 再保留「有落在 "夜市範圍內"+"夜市周圍 500 m之方框內"的事故」。
                 mask = (df["latitude"].between(nm["s_lat"], nm["n_lat"])) & (
                     df["longitude"].between(nm["w_lon"], nm["e_lon"])
                 )

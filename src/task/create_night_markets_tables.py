@@ -15,7 +15,7 @@ NIGHT_MARKET_TABLES = {
     "fact_night_markets": """CREATE TABLE IF NOT EXISTS `fact_night_markets`(
                         `nightmarket_id` INT AUTO_INCREMENT PRIMARY KEY NOT NULL COMMENT '夜市代碼',
                         `nightmarket_name` VARCHAR(30) COMMENT '夜市名稱',
-                        `region` VARCHAR(10) COMMENT '夜市所屬地區(北、中、南部)',
+                        `region` VARCHAR(10) COMMENT '夜市所屬地區(北部、中部、南部、東部與東部離島、其他離島)',
                         `zipcode` VARCHAR(10) COMMENT '夜市所屬郵遞區號',
                         `city` VARCHAR(10) COMMENT '夜市所屬第一、第二行政區(只呈現: xx市/xx縣)',
                         `district` VARCHAR(10) COMMENT '夜市所屬第二、三行政區(只呈現：xx區)',
