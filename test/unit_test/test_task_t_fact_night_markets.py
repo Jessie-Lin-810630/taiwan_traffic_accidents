@@ -265,13 +265,22 @@ class Test地址拆解:
         assert "台" not in got["area_road"]
 
     def test_地區由縣市反查而不是另外比對(self):
-        """臺東縣屬東部，region 的唯一來源是 cities_per_region 的分組。"""
+        """臺東縣屬東部與東部離島，region 的唯一來源是 cities_per_region 的分組。"""
         got = _clean_night_market_address(
             {"formatted_address": "950臺東縣臺東市正氣路"}, cities_per_region
         )
 
-        assert got["region"] == "東部"
+        assert got["region"] == "東部與東部離島"
         assert got["city"] == "臺東縣"
+
+    def test_宜蘭縣屬北部(self):
+        """ADR-0020 把宜蘭縣定在北部，抓取階段寫進 MySQL 的 region 就是這個值。"""
+        got = _clean_night_market_address(
+            {"formatted_address": "260宜蘭縣宜蘭市和睦路"}, cities_per_region
+        )
+
+        assert got["region"] == "北部"
+        assert got["city"] == "宜蘭縣"
 
     def test_比對不到的欄位填說明字串而不是空值(self):
         """下游要能分辨「沒有這筆資料」與「清理邏輯漏掉」，空字串做不到。"""

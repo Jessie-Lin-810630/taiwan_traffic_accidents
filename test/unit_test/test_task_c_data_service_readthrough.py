@@ -76,15 +76,33 @@ class TestGetAllNightmarketsCleaning:
         "field, value",
         [
             ("area_road", "琉球鄉中山路"),
+            ("nightmarket_name", "小琉球夜市"),
+        ],
+    )
+    def test_琉球的夜市歸到其他離島(self, field, value):
+        """琉球在屏東縣，縣市層級是南部，ADR-0020 要求改寫成其他離島。"""
+        row = _night_market_row(region="南部", **{field: value})
+
+        with patch.object(ds, "get_cache", return_value=None):
+            with patch.object(
+                ds, "get_night_markets_table", return_value=pd.DataFrame([row])
+            ):
+                with patch.object(ds, "set_cache"):
+                    result = ds.get_all_nightmarkets()
+
+        assert result["region"].iloc[0] == "其他離島"
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
             ("area_road", "蘭嶼鄉紅頭村"),
             ("area_road", "綠島鄉南寮村"),
-            ("nightmarket_name", "小琉球夜市"),
             ("nightmarket_name", "蘭嶼夜市"),
             ("nightmarket_name", "綠島夜市"),
         ],
     )
-    def test_離島夜市一律歸到東部與東部離島(self, field, value):
-        """小琉球、蘭嶼、綠島在原始資料歸屬各異，統一改寫成同一個地區。"""
+    def test_蘭嶼與綠島的夜市歸到東部與東部離島(self, field, value):
+        """兩者在臺東縣，縣市層級已是同一區，改寫仍要明確保住這個歸屬。"""
         row = _night_market_row(region="南部", **{field: value})
 
         with patch.object(ds, "get_cache", return_value=None):
