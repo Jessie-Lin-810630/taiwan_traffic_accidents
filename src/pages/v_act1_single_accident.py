@@ -104,7 +104,10 @@ def get_single_market_redis(lat, lon, radius_km):
     Notes:
         「快取故障」與「快取裡沒有這筆資料」的語意分離參考 ADR-0003。
     """
-    cache_key = f"traffic:nearby_v12:{lat:.4f}_{lon:.4f}_3.0_all_sample"
+    cache_key = (
+        f"mart:pedestrian_nearby_market:"
+        f"{lat:.4f}_{lon:.4f}_{ds.RADIUS_KM_ROUGH:.1f}_all_sample"
+    )
     result = get_cache(cache_key)
 
     if isinstance(result, tuple) and len(result) >= 1:

@@ -1,6 +1,6 @@
 """Streamlit 分頁：全臺夜市事故嚴重度分析。
 
-讀取 DAG 預先算好的全臺總表（Redis 鍵 `market:national_master_df`），依地區、
+讀取 DAG 預先算好的全臺總表（Redis 鍵 `mart:pedestrian_national_master`），依地區、
 縣市與時間篩選後繪出各項圖表。本頁不做重運算，也不直接查 MySQL。
 """
 
@@ -80,7 +80,7 @@ def get_dynamic_national_data() -> pd.DataFrame:
     Raises:
         RedisError: 讀取快取失敗。
     """
-    cache_key = "market:national_master_df"  # 理應在dags/d_redis_precompute.py存入Redis
+    cache_key = "mart:pedestrian_national_master"  # 理應在dags/d06_precompute_to_redis.py存入Redis
     unpickled_data = get_cache(cache_key)
     # unpickled_data = pd.DataFrame(unpickled_data)
     if isinstance(unpickled_data, pd.DataFrame) and not unpickled_data.empty:
@@ -143,7 +143,7 @@ def main() -> None:
             st.stop()
 
     if df_raw.empty:
-        # aggregate_national_master寫在dags/d_redis_precompute.py
+        # aggregate_national_master 寫在 dags/d06_precompute_to_redis.py
         st.warning(
             "⚠️ 無法取得全台總表，請確認 Airflow 的 `aggregate_national_master` 排程是否已執行完成。"
         )

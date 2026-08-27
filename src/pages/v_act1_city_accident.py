@@ -1,6 +1,6 @@
 """Streamlit 分頁：各縣市夜市事故比較，以縣市與夜市為單位做安全對標與年增率排名。
 
-資料同樣來自 DAG 預先算好的全臺總表（Redis 鍵 `market:national_master_df`）。
+資料同樣來自 DAG 預先算好的全臺總表（Redis 鍵 `mart:pedestrian_national_master`）。
 `REGION_ORDER` 與 `CITY_ORDER` 兩個常數把地區與縣市的順序寫死，讓下拉選單與
 圖表都維持習慣的地理順序，而不是依資料出現的先後排列。
 """
@@ -81,7 +81,7 @@ def get_real_city_data():
     Notes:
         「快取故障」與「快取裡沒有這筆資料」的語意分離參考 ADR-0003。
     """
-    df = get_cache("market:national_master_df")
+    df = get_cache("mart:pedestrian_national_master")
     if df is None or df.empty:
         return pd.DataFrame()
 
