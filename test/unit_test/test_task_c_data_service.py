@@ -67,7 +67,9 @@ class TestCalAccidentsNearbyNightmarket:
         """批次不存在代表上游未產出，不可當成正常結果。"""
         with patch.object(ds, "get_cache", return_value=None):
             with pytest.raises(ValueError, match="無法計算附近事故"):
-                ds.cal_accidents_nearby_nightmarket("xcom_claim_check:missing")
+                ds.cal_accidents_nearby_nightmarket(
+                    "market:night_markets_batch:missing"
+                )
 
     def test_查詢失敗時整批拋出(self):
         """一次查詢服務整批，它失敗就是整批沒資料，沒有部分成功可言（ADR-0009 子決策 6）。"""

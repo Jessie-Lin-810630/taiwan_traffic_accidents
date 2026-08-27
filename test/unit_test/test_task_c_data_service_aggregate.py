@@ -38,7 +38,7 @@ class TestBuildBatchBboxQuery:
     def test_每個夜市有獨立編號的佔位符(self):
         """佔位符帶索引，同一批的夜市才不會互相覆蓋綁定值。"""
         batch = [_market("A", 25.0, 121.0), _market("B", 22.6, 120.3)]
-        query, params = ds._build_batch_bbox_query(batch)
+        query, params = ds._build_query_market_batch_nearby_box(batch)
 
         assert ":min_lat_0" in query and ":max_lon_0" in query
         assert ":min_lat_1" in query and ":max_lon_1" in query
@@ -47,7 +47,7 @@ class TestBuildBatchBboxQuery:
     def test_各夜市的方框以_or_串成聯集(self):
         """一個批次一句查詢，各夜市的方框以 OR 串起來（ADR-0009）。"""
         batch = [_market("A", 25.0, 121.0), _market("B", 22.6, 120.3)]
-        query, _ = ds._build_batch_bbox_query(batch)
+        query, _ = ds._build_query_market_batch_nearby_box(batch)
 
         assert query.count(" OR ") == 1
         assert query.count("latitude BETWEEN") == 2
@@ -55,7 +55,7 @@ class TestBuildBatchBboxQuery:
     def test_座標不內插進查詢字串(self):
         """座標一律走 bind parameter，不以字串內插回查詢。"""
         batch = [_market("A", 25.0878, 121.5240)]
-        query, params = ds._build_batch_bbox_query(batch)
+        query, params = ds._build_query_market_batch_nearby_box(batch)
 
         assert "25.0878" not in query
         assert "121.524" not in query
@@ -65,18 +65,18 @@ class TestBuildBatchBboxQuery:
     def test_半徑可調整且反映在參數上(self):
         """半徑換算成度數後進參數，不寫死在查詢裡。"""
         batch = [_market("A", 25.0, 121.0)]
-        _, params = ds._build_batch_bbox_query(batch, radius_km=1.0)
+        _, params = ds._build_query_market_batch_nearby_box(batch, radius_km=1.0)
 
         assert params["min_lat_0"] == pytest.approx(25.0 - 1.0 / 111)
 
     def test_夜市缺座標時拋出(self):
         """缺座標是上游資料的問題，這裡拋出而不是靜默跳過。"""
         with pytest.raises(KeyError):
-            ds._build_batch_bbox_query([{"name": "沒座標"}])
+            ds._build_query_market_batch_nearby_box([{"name": "沒座標"}])
 
     def test_空批次組不出條件(self):
         """空批次會產生 WHERE 後面沒東西的查詢，呼叫端不該傳空批次進來。"""
-        query, params = ds._build_batch_bbox_query([])
+        query, params = ds._build_query_market_batch_nearby_box([])
 
         assert query.endswith("WHERE ")
         assert params == {}
@@ -123,8 +123,8 @@ class TestGetAndSliceNightmarketsMultibatches:
                 keys = ds.get_and_slice_nightmarkets_multibatches()
 
         assert all(isinstance(k, str) for k in keys)
-        assert keys[0].startswith("xcom_claim_check:")
-        assert keys[0].endswith(":batch_0")
+        assert keys[0].startswith("market:night_markets_batch:")
+        assert keys[0].endswith(":0")
 
     def test_每次呼叫的批次鍵都不重複(self):
         """鍵帶 uuid，兩次執行的批次不會互相覆蓋。"""
@@ -206,10 +206,8 @@ class TestAggregateNationalMaster:
 
     def _run(self, market: dict, nearby: pd.DataFrame):
         """跑一次聚合，回傳 set_cache 的 mock 以便檢查各把鍵的內容。"""
-        batch_key = "xcom_claim_check:uuid:batch_0"
-        nearby_key = (
-            f"traffic:nearby_v12:{market['lat']:.4f}_{market['lon']:.4f}_3.0_all_sample"
-        )
+        batch_key = "market:night_markets_batch:uuid:0"
+        nearby_key = f"mart:pedestrian_nearby_market:{market['lat']:.4f}_{market['lon']:.4f}_3.0_all_sample"
 
         def fake_get_cache(key):
             """依鍵回傳批次清單或周邊事故，其餘鍵視為未命中。"""
@@ -238,7 +236,7 @@ class TestAggregateNationalMaster:
         market = _market("士林夜市", 25.0, 121.0)
         m_set, _ = self._run(market, self._nearby_df())
 
-        master = self._cached(m_set, "market:national_master_df")
+        master = self._cached(m_set, "mart:pedestrian_national_master")
         assert len(master) == 1
         assert master["nightmarket_name"].iloc[0] == "士林夜市"
         assert master["nightmarket_city"].iloc[0] == "臺北市"
@@ -262,7 +260,7 @@ class TestAggregateNationalMaster:
         market = _market("士林夜市", 25.0, 121.0)
         m_set, _ = self._run(market, self._nearby_df(hour=hour))
 
-        master = self._cached(m_set, "market:national_master_df")
+        master = self._cached(m_set, "mart:pedestrian_national_master")
         assert master["weight"].iloc[0] == expected_weight
 
     def test_pdi_分數為死亡乘十加受傷乘二再乘權重(self):
@@ -270,7 +268,7 @@ class TestAggregateNationalMaster:
         market = _market("士林夜市", 25.0, 121.0)
         m_set, _ = self._run(market, self._nearby_df(hour=12, death=1, injury=2))
 
-        master = self._cached(m_set, "market:national_master_df")
+        master = self._cached(m_set, "mart:pedestrian_national_master")
         assert master["severity"].iloc[0] == 14  # 1*10 + 2*2
         assert master["pdi_score"].iloc[0] == 14.0  # 白天不加權
 
@@ -279,66 +277,26 @@ class TestAggregateNationalMaster:
         market = _market("士林夜市", 25.0, 121.0)
         m_set, _ = self._run(market, self._nearby_df(hour=20, death=1, injury=2))
 
-        master = self._cached(m_set, "market:national_master_df")
+        master = self._cached(m_set, "mart:pedestrian_national_master")
         assert master["pdi_score"].iloc[0] == pytest.approx(21.0)  # 14 * 1.5
-
-    @pytest.mark.parametrize(
-        "hour, expected_slot",
-        [
-            (6, "Day"),
-            (12, "Day"),
-            (17, "Day"),
-            (18, "Night"),
-            (5, "Night"),
-            (0, "Night"),
-        ],
-    )
-    def test_六點到十八點標為白天其餘為夜間(self, hour, expected_slot):
-        """時段標籤的邊界值容易寫錯，逐一釘住。"""
-        market = _market("士林夜市", 25.0, 121.0)
-        m_set, _ = self._run(market, self._nearby_df(hour=hour))
-
-        macro = self._cached(m_set, "traffic:stats:audit_macro")
-        assert macro["taiwan_markets_total"][0]["time_slot"] == expected_slot
 
     def test_補上年季月與星期等時間欄位(self):
         """前端的篩選器依賴這幾欄，缺一個就少一種切法。"""
         market = _market("士林夜市", 25.0, 121.0)
         m_set, _ = self._run(market, self._nearby_df())
 
-        master = self._cached(m_set, "market:national_master_df")
+        master = self._cached(m_set, "mart:pedestrian_national_master")
         assert master["Year"].iloc[0] == 2024
         assert master["Quarter"].iloc[0] == 1
         assert master["Month"].iloc[0] == 1
         assert master["Weekday"].iloc[0] == "星期一"
-
-    def test_產出巨觀統計與各夜市的微觀統計(self):
-        """三種快取各有消費端，少寫一把前端就會顯示請確認排程。"""
-        market = _market("士林夜市", 25.0, 121.0)
-        m_set, _ = self._run(market, self._nearby_df())
-
-        keys = [c.args[0] for c in m_set.call_args_list]
-        assert "market:national_master_df" in keys
-        assert "traffic:stats:audit_macro" in keys
-        assert "traffic:stats:audit_market:士林夜市" in keys
-
-    def test_巨觀統計含全臺與分縣市兩組(self):
-        """巨觀 bundle 的結構是前端解析的契約。"""
-        market = _market("士林夜市", 25.0, 121.0)
-        m_set, _ = self._run(market, self._nearby_df())
-
-        macro = self._cached(m_set, "traffic:stats:audit_macro")
-        assert "taiwan_markets_total" in macro
-        assert "city_markets_total" in macro
-        assert "updated_at" in macro
-        assert macro["taiwan_markets_total"][0]["acc_count"] == 1
 
     def test_聚合完成後清掉批次鍵(self):
         """批次資料是暫存的寄物櫃，用完要還，否則佔著 Redis 記憶體。"""
         market = _market("士林夜市", 25.0, 121.0)
         _, m_del = self._run(market, self._nearby_df())
 
-        m_del.assert_called_once_with("xcom_claim_check:uuid:batch_0")
+        m_del.assert_called_once_with("market:night_markets_batch:uuid:0")
 
     @pytest.mark.parametrize(
         "missing_col", ["accident_hourtime", "death_count", "injury_count"]

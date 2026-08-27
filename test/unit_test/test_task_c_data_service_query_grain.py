@@ -144,7 +144,7 @@ class TestOutputEquivalence:
         """與改動前的邏輯跑同一份假資料，輸出必須逐列相同（ADR-0009 子決策 8）。"""
         written = _run()
         key = (
-            f"traffic:nearby_v12:{nightmarket['lat']:.4f}_"
+            f"mart:pedestrian_nearby_market:{nightmarket['lat']:.4f}_"
             f"{nightmarket['lon']:.4f}_3.0_all_sample"
         )
 
@@ -155,8 +155,12 @@ class TestOutputEquivalence:
     def test_重疊區的事故同時出現在兩個夜市的快取中(self):
         """重疊只在傳輸層被消除，語意上該事故仍屬於兩個夜市。"""
         written = _run()
-        shilin = written["traffic:nearby_v12:25.0878_121.5240_3.0_all_sample"]
-        ningxia = written["traffic:nearby_v12:25.0570_121.5150_3.0_all_sample"]
+        shilin = written[
+            "mart:pedestrian_nearby_market:25.0878_121.5240_3.0_all_sample"
+        ]
+        ningxia = written[
+            "mart:pedestrian_nearby_market:25.0570_121.5150_3.0_all_sample"
+        ]
 
         assert "A2" in set(shilin["accident_id"])
         assert "A2" in set(ningxia["accident_id"])
@@ -193,7 +197,7 @@ class TestQueryGrain:
 
     def test_查詢以聯集涵蓋批次內每個夜市(self):
         """每個夜市貢獻一組 4 個綁定參數，缺一個就有夜市被漏掉。"""
-        query, params = ds._build_batch_bbox_query(BATCH)
+        query, params = ds._build_query_market_batch_nearby_box(BATCH)
 
         assert query.count(" OR ") == len(BATCH) - 1
         assert len(params) == len(BATCH) * 4
@@ -204,7 +208,7 @@ class TestQueryGrain:
 
     def test_查詢字串不含座標字面值(self):
         """座標一律走 bind parameter（ADR-0009 子決策 3）。"""
-        query, _ = ds._build_batch_bbox_query(BATCH)
+        query, _ = ds._build_query_market_batch_nearby_box(BATCH)
 
         assert "25.0878" not in query
         assert "121.5" not in query
@@ -221,7 +225,7 @@ class TestCacheKeys:
         assert len(written) == len(BATCH)
         for nightmarket in BATCH:
             assert (
-                f"traffic:nearby_v12:{nightmarket['lat']:.4f}_"
+                f"mart:pedestrian_nearby_market:{nightmarket['lat']:.4f}_"
                 f"{nightmarket['lon']:.4f}_3.0_all_sample"
             ) in written
 
@@ -229,7 +233,7 @@ class TestCacheKeys:
         """參數保留是為了多半徑／分年度預計算，功能必須真的還在。"""
         written = _run(radius_m_list=[500, 3000], year_targets=["all_sample", 2025])
 
-        shilin = "traffic:nearby_v12:25.0878_121.5240"
+        shilin = "mart:pedestrian_nearby_market:25.0878_121.5240"
         # 粗篩契約 key + 0.5_all_sample + 0.5_2025 + 3.0_2025；3.0_all_sample 只寫一次
         assert f"{shilin}_3.0_all_sample" in written
         assert f"{shilin}_0.5_all_sample" in written
@@ -243,7 +247,7 @@ class TestCacheKeys:
 
         for nightmarket in BATCH:
             assert (
-                f"traffic:nearby_v12:{nightmarket['lat']:.4f}_"
+                f"mart:pedestrian_nearby_market:{nightmarket['lat']:.4f}_"
                 f"{nightmarket['lon']:.4f}_3.0_all_sample"
             ) in written
 

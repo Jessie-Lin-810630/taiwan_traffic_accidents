@@ -56,13 +56,13 @@ def precompute_to_redis():
         return market_batch_keys
 
     @task
-    def task_cal_accidents_nearby_nightmarket(batch_key):
+    def task_cal_accidents_nearby_nightmarket(market_batch_key):
         """計算一個批次內每個夜市周邊的事故，結果寫入 Redis。
 
         由 `expand()` 依批次鍵動態展開，每個批次各是一個 task 實例。
 
         Args:
-            batch_key (str): 該批次夜市清單在 Redis 中的鍵。
+            market_batch_key (str): 該批次夜市清單在 Redis 中的鍵。
 
         Returns:
             str: 處理完成的訊息。
@@ -71,7 +71,7 @@ def precompute_to_redis():
             ValueError: 批次在 Redis 中不存在或為空。
             RedisError: 讀取或寫入快取失敗。
         """
-        cal_result = cal_accidents_nearby_nightmarket(batch_key)
+        cal_result = cal_accidents_nearby_nightmarket(market_batch_key)
         return cal_result
 
     @task
@@ -94,7 +94,7 @@ def precompute_to_redis():
     batch_keys_lst = task_get_and_slice_nm_multibatches()
     with TaskGroup(group_id="data_service_of_precompute_night_markets"):
         cal_done = task_cal_accidents_nearby_nightmarket.expand(
-            batch_key=batch_keys_lst
+            market_batch_key=batch_keys_lst
         )
         agg_done = task_aggregate_national_master(batch_keys_lst)
 
