@@ -56,6 +56,7 @@ def _get_redis_pool() -> redis.ConnectionPool:
 
     global _REDIS_POOL
     if _REDIS_POOL is None:
+        logger.info("==== Connecting to Redis Server... ====")
         _REDIS_POOL = redis.ConnectionPool(
             host=redis_host,
             port=int(redis_port),
@@ -81,8 +82,6 @@ def create_redis_client() -> redis.Redis:
         RedisError: 連線失敗或 ping 無回應。
         Exception: 其他非預期錯誤，同樣記下 error 後原樣往外拋。
     """
-    logger.info("==== Connecting to Redis Server... ====")
-
     try:
         # 1. 從全域連線池獲取連線
         pool = _get_redis_pool()
@@ -99,7 +98,7 @@ def create_redis_client() -> redis.Redis:
         raise
 
     else:
-        logger.info("==== Successfully connected to Redis! ====")
+        logger.info("==== Connection with Redis is Normal. ====")
         return r
 
 
