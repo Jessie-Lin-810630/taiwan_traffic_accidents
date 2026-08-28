@@ -7,7 +7,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-import src.task.core.c_data_service as ds
 import src.task.core.c_ui as ui
 from src.util.logger_crtx import get_logger
 
@@ -147,15 +146,7 @@ def main():
     Notes:
         前端負責決定如何降級，參考 ADR-0003。
     """
-    try:
-        df_market = ds.get_all_nightmarkets()
-    except Exception:
-        # 前端是例外停止傳播之處，須完整記錄
-        logger.error("資料服務讀取失敗", exc_info=True)
-        st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
-        st.stop()
-
-    ui.render_sidebar(df_market)
+    ui.render_sidebar()
     act5_render()
 
 

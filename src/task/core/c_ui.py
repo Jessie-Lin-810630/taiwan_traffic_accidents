@@ -28,17 +28,11 @@ from folium.plugins import (  # two plugins used for heatmaps and clustered mark
 
 
 # 1. 側邊欄 (Sidebar)
-def render_sidebar(df_market):
+def render_sidebar() -> dict:
     """畫出所有分頁共用的左側導航欄，回傳預設的地圖圖層開關。
 
-    導航欄包含語言切換掛件與各分頁的連結。回傳值的三個元素中，實際被呼叫端
-    使用的只有第三個 `layers`。
-
-    Args:
-        df_market (pandas.DataFrame): 夜市資料；目前僅為維持各頁呼叫方式一致而保留。
-
     Returns:
-        tuple[bool, None, dict]: 第三個元素是圖層開關，形如：
+        dict: 圖層開關，例如：
 
             {
                 "traffic_heat": True,
@@ -48,7 +42,7 @@ def render_sidebar(df_market):
             }
     """
     # 呼叫語言切換選單
-    st.sidebar.markdown("### 🌐 語言切換 / Language")  # 跟使用write會有差嗎?
+    st.sidebar.markdown("### 🌐 語言切換 / Language")
     render_google_translator()
 
     st.sidebar.page_link("app.py", label="首頁", icon="🏠")
@@ -75,7 +69,7 @@ def render_sidebar(df_market):
         "weather": False,
         "accidents": True,
     }
-    return True, None, layers  # only layers is actually used, so why return True, None?
+    return layers
 
 
 # 效能計時函式搭配上下文管理器decorator
@@ -130,7 +124,7 @@ def build_map(
         is_overview (bool): 是否為全臺總覽模式。
         target_market (dict): 指定的夜市，須含 `lat`、`lon` 與 `MarketName`；
             總覽模式可傳 `None`。
-        layers (dict): 圖層開關，即 `render_sidebar()` 回傳的第三個元素。
+        layers (dict): 圖層開關，即 `render_sidebar()` 的回傳值。
         dynamic_zoom (int | None): 單一夜市模式的縮放層級，`None` 時為 16。
         radius_m (int): 分析範圍圓圈的半徑，單位公尺。
         traffic_global (pandas.DataFrame): 全臺熱力圖資料，空值則不畫該圖層。

@@ -159,8 +159,7 @@ def main():
             st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
             st.stop()
 
-    st.session_state["show_accidents"] = True
-    _, _, layers = ui.render_sidebar(df_market)
+    layers = ui.render_sidebar()
 
     st.markdown(
         """

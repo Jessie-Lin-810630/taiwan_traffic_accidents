@@ -100,9 +100,11 @@ def main():
         )  # 暫停2.5秒，讓splash內的元素(動畫)被清掉(下一行的關係)之前可以留在畫面上。
     splash.empty()  # 清掉splash容器。
 
-    # 4. 取得夜市主檔，供側邊欄的夜市選單使用
+    # 4. 進站時先探一次夜市主檔，確認資料服務可用
+    # 首頁呼叫這個的目的是讓資料服務的故障在使用者進站時就被攔下來，
+    # 而不是等使用者點進分頁。
     try:
-        df_market = ds.get_all_nightmarkets()
+        ds.get_all_nightmarkets()
     except Exception:
         # 前端是例外停止傳播之處，須完整記錄
         logger.error("首頁資料載入失敗", exc_info=True)
@@ -110,7 +112,7 @@ def main():
         st.stop()
 
     # 5. 呼叫側邊欄
-    is_overview, target_market, layers = ui.render_sidebar(df_market)
+    ui.render_sidebar()
 
     # 6. 主頁排版：縮排集中視覺 (控制整體最大寬度)
 

@@ -53,7 +53,7 @@ CITY_ORDER = [
 # 資料存取層
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_real_city_data():
+def get_real_city_data(_df_market):
     """讀取全臺夜市周邊事故總表，補上地區與季別標籤。
 
     先依 `accident_id` 去重，避免跨夜市重疊區域的事故被重複計算，再算出
@@ -63,6 +63,10 @@ def get_real_city_data():
 
     「快取故障」與「快取裡沒有這筆資料」是兩回事：前者拋出例外交呼叫端處理，
     後者才回傳空表。
+
+    Args:
+        _df_market (pandas.DataFrame): 夜市主檔，本函式只取其中的 `area_road` 欄。
+            參數名的底線前綴是表示不對它計算雜湊。
 
     Returns:
         pandas.DataFrame: 補好標籤的總表，形如：
@@ -75,7 +79,6 @@ def get_real_city_data():
 
     Raises:
         RedisError: 讀取快取失敗。
-        SQLAlchemyError: 取夜市主檔時查詢 MySQL 失敗。
 
     Notes:
         「快取故障」與「快取裡沒有這筆資料」的語意分離參考 ADR-0003。
@@ -133,9 +136,8 @@ def get_real_city_data():
 
     # 附屬離島的獨立區域劃分邏輯見 ADR-0020
     # 夜市主檔的行政區欄位是 area_road（不是 AdminDistrict），比照 c_data_service 用關鍵字比對
-    df_market = ds.get_all_nightmarkets()
-    if not df_market.empty and "area_road" in df_market.columns:
-        admin_map = df_market.set_index("nightmarket_name")["area_road"].to_dict()
+    if not _df_market.empty and "area_road" in _df_market.columns:
+        admin_map = _df_market.set_index("nightmarket_name")["area_road"].to_dict()
         df["area_road"] = df["nightmarket_name"].map(admin_map)
         for keyword, region in (("琉球", "其他離島"), ("蘭嶼|綠島", "東部與東部離島")):
             df.loc[df["area_road"].str.contains(keyword, na=False), "region"] = region
@@ -195,7 +197,7 @@ def main():
         st.error("⛔ 資料服務暫時無法使用，請稍後再試或聯繫維運人員。")
         st.stop()
 
-    ui.render_sidebar(df_market)
+    ui.render_sidebar()
 
     st.markdown(
         """
@@ -232,7 +234,7 @@ def main():
     """)
 
     try:
-        df_raw = get_real_city_data()
+        df_raw = get_real_city_data(df_market)
     except RedisError:
         logger.error("全台總表快取讀取失敗", exc_info=True)
         st.error("⛔ 快取服務暫時無法使用，請稍後再試或聯繫維運人員。")
