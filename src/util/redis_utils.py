@@ -136,8 +136,8 @@ def set_cache(key: str, value, ttl: int = 864000) -> None:
 def get_cache(key: str) -> dict | pd.DataFrame | None:
     """從 Redis 讀出快取並還原成原本的物件。
 
-    讀回的位元組以 `pickle.loads()` 還原，因此回傳型別取決於當初存進去的是什麼。
-    鍵不存在或已過期會回傳 `None`，與「Redis 故障」區分開來 —— 後者是拋例外。
+    - 讀回的位元組以 `pickle.loads()` 還原，因此回傳型別取決於當初存進去的是什麼。
+    - 快取 key 不存在於 Redis 或已過期會回傳 `None`，這與「Redis 連線故障」的例外是有別的。
 
     Args:
         key (str): 快取的鍵名。
