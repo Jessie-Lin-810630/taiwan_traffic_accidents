@@ -14,6 +14,56 @@ logger = get_logger(__name__)
 
 st.set_page_config(layout="wide", page_title="修法前後分析研究", page_icon="🖼️")
 
+# Tableau Public 上這頁三張圖所屬的 workbook 名稱，三個分頁都取自同一本
+TABLEAU_WORKBOOK = "tjr104_mart"
+
+# 嵌入時的顯示參數，:device 固定成桌機版面避免窄視窗被切成手機版，
+# :tabs 關掉 workbook 內部的分頁列，讓每個分頁只看得到自己那張圖
+TABLEAU_EMBED_PARAMS = (
+    ":embed=y"
+    "&:showVizHome=no"
+    "&:display_count=n"
+    "&:language=zh-TW"
+    "&:device=desktop"
+    "&:tabs=no"
+    "&:showShareOptions=false"
+)
+
+
+def get_tableau_html(sheet):
+    """組出嵌入單一 Tableau 儀表板所需的 HTML。
+
+    三個分頁共用同一段嵌入程式碼，只有 workbook 內的 sheet 編號不同。
+
+    Args:
+        sheet (str): workbook 內的 sheet 編號，例如 `"1"`。
+
+    Returns:
+        str: 可交給 `components.html()` 渲染的 HTML 字串。
+
+    Notes:
+        走 `views/<workbook>/<sheet>` 這條永久路徑，不能用 Share 產生的
+        `shared/<token>` 短碼，因為後者會不定期失效。
+    """
+    src = (
+        f"https://public.tableau.com/views/{TABLEAU_WORKBOOK}/{sheet}"
+        f"?{TABLEAU_EMBED_PARAMS}"
+    )
+    return f"""
+    <div class='chart-container'>
+        <iframe
+            src='{src}'
+            width='100%'
+            height='850'
+            frameborder='0'
+            scrolling='no'
+            allowfullscreen
+            allow='fullscreen'
+            style='display: block; border: none;'>
+        </iframe>
+    </div>
+    """
+
 
 def act5_render():
     """畫出頁面樣式與三個嵌入 Tableau 儀表板的分頁標籤。
@@ -66,75 +116,17 @@ def act5_render():
         unsafe_allow_html=True,
     )
 
-    # 建立一個通用的 HTML 產生器，利用 <object> 標籤與 Tableau 的 JavaScript API (viz_v1.js)，將公開的 Tableau Dashboard 嵌入到 Streamlit 中
-    # 傳入不同的 url_path 即可共用同一段嵌入代碼
-    def get_tableau_html(url_path, static_image):
-        """組出嵌入單一 Tableau 儀表板所需的 HTML。
-
-        三個分頁共用同一段嵌入程式碼，只有儀表板路徑與預覽圖不同。
-
-        Args:
-            url_path (str): Tableau Public 上的儀表板路徑，例如 `"shared/JJ6HP2KN6"`。
-            static_image (str): 載入前顯示的預覽圖網址。
-
-        Returns:
-            str: 可交給 `components.html()` 渲染的 HTML 字串。
-        """
-        return f"""
-        <div class='chart-container'>
-            <div class='tableauPlaceholder' style='position: relative; width: 100%; height: 850px;'>
-                <object class='tableauViz' style='display:none; width: 100%; height: 100%;'>
-                    <param name='host_url' value='https%3A%2F%2Fpublic.tableau.com%2F' />
-                    <param name='embed_code_version' value='3' />
-                    <param name='path' value='{url_path}' />
-                    <param name='toolbar' value='no' />
-                    <param name='static_image' value='{static_image}' />
-                    <param name='animate_transition' value='yes' />
-                    <param name='display_static_image' value='no' />
-                    <param name='display_spinner' value='yes' />
-                    <param name='display_overlay' value='yes' />
-                    <param name='display_count' value='yes' />
-                    <param name='language' value='zh-TW' />
-                    <param name='filter' value=':original_view=yes' />
-                </object>
-            </div>
-        </div>
-        <script type='text/javascript'>
-            var divElements = document.getElementsByClassName('tableauPlaceholder');
-            var divElement = divElements[divElements.length - 1];
-            var vizElement = divElement.getElementsByTagName('object')[0];
-            vizElement.style.width = '100%';
-            /* 強制設定為 850px 避免高度塌陷擠壓 */
-            vizElement.style.height = '850px';
-            var scriptElement = document.createElement('script');
-            scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';
-            vizElement.parentNode.insertBefore(scriptElement, vizElement);
-        </script>
-        """
-
     tab1, tab2, tab3 = st.tabs(["政策有效嗎 ？", "車禍趨勢", "車禍肇因"])
 
-    # 透過 components.html 將產生的語法渲染在畫面上，scrolling=False 隱藏預設捲軸以求美觀
+    # sheet 編號對應 Tableau Public 上 tjr104_mart 這本 workbook 的分頁順序
     with tab1:
-        html1 = get_tableau_html(
-            "shared&#47;G4WQGYSTG",
-            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;G4&#47;G4WQGYSTG&#47;1.png",
-        )
-        components.html(html1, height=920, scrolling=False)
+        components.html(get_tableau_html("1"), height=920, scrolling=False)
 
     with tab2:
-        html2 = get_tableau_html(
-            "shared&#47;56837R6KD",
-            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;56&#47;56837R6KD&#47;1.png",
-        )
-        components.html(html2, height=920, scrolling=False)
+        components.html(get_tableau_html("3"), height=920, scrolling=False)
 
     with tab3:
-        html3 = get_tableau_html(
-            "views&#47;tjr104_mart&#47;2?:language=zh-TW&amp;:embed=true&amp;:sid=&amp;:redirect=auth",
-            "https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;tj&#47;tjr104_mart&#47;2&#47;1.png",
-        )
-        components.html(html3, height=920, scrolling=False)
+        components.html(get_tableau_html("2"), height=920, scrolling=False)
 
 
 def main():
